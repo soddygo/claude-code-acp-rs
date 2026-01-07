@@ -1,0 +1,63 @@
+# OpenTelemetry Collector Configuration
+# Configured with spanmetrics connector for Jaeger SPM support
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  # Export traces to Jaeger via OTLP
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # Export metrics for Prometheus scraping
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: traces
+    resource_to_telemetry_conversion:
+      enabled: true
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+connectors:
+  # SpanMetrics connector generates RED metrics from spans
+  spanmetrics:
+    histogram:
+      explicit:
+        buckets: [2ms, 4ms, 6ms, 8ms, 10ms, 50ms, 100ms, 200ms, 400ms, 800ms, 1s, 1400ms, 2s, 5s, 10s, 15s]
+    dimensions:
+      - name: http.method
+        default: GET
+      - name: http.status_code
+      - name: http.route
+    exemplars:
+      enabled: true
+    dimensions_cache_size: 1000
+    aggregation_temporality: "AGGREGATION_TEMPORALITY_CUMULATIVE"
+    metrics_flush_interval: 15s
+
+service:
+  telemetry:
+    logs:
+      level: info
+
+  pipelines:
+    # Traces pipeline: receive OTLP, process, export to Jaeger and spanmetrics
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/jaeger, spanmetrics]
+
+    # Metrics pipeline: receive from spanmetrics connector, export for Prometheus
+    metrics/spanmetrics:
+      receivers: [spanmetrics]
+      exporters: [prometheus]

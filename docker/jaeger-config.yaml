@@ -1,0 +1,50 @@
+# Jaeger v2 Configuration
+# Enables SPM (Service Performance Monitoring) with Prometheus metrics backend
+
+service:
+  telemetry:
+    resource:
+      service.name: jaeger
+    logs:
+      level: info
+
+  extensions: [jaeger_storage, jaeger_query]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [jaeger_storage_exporter]
+
+extensions:
+  jaeger_storage:
+    backends:
+      memory_store:
+        memory:
+          max_traces: 100000
+    metric_backends:
+      prometheus_store:
+        prometheus:
+          endpoint: http://prometheus:9090
+          normalize_calls: true
+          normalize_duration: true
+
+  jaeger_query:
+    storage:
+      traces: memory_store
+      metrics: prometheus_store
+    ui:
+      config_file: /etc/jaeger/jaeger-ui.json
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+    timeout: 1s
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: memory_store

@@ -2,7 +2,7 @@
 
 ## Project Alpha
 
-我想基于 rust语言的 claude code sdk（https://github.com/soddygo/claude-agent-sdk-rs.git），来实现ACP协议（agent client protocol）的Agent。
+我想基于 rust语言的 claude code sdk（https://github.com/soddygo/claude-code-agent-sdk.git），来实现ACP协议（agent client protocol）的Agent。
 我现在给几个参考的项目：
 - https://github.com/zed-industries/claude-code-acp.git zed公司用ts语言实现的ACP协议的agent，使用的claude code ts语言的sdk
 本地源码位置： vendors/claude-code-acp，对应功能整理的文档是： specs/claude-code-acp/claude-code-acp-feature.md （以后代码会更新，可能这个文档不一定会更新及时）
@@ -12,6 +12,7 @@
 本地源码位置： vendors/acp-rust-sdk ，对应功能整理的文档是 ：specs/claude-code-acp/claude-agent-sdk-feature.md （以后代码会更新，可能这个文档不一定会更新及时）
 - https://github.com/agentclientprotocol/agent-client-protocol.git 这个是zed公司，对ACP协议的Scheme 定义，各个语言的ACP协议的SDK，都是基于这个协议，来进行实现。
 本地源码位置： vendors/agent-client-protocol
+- https://github.com/soddygo/claude-code-agent-sdk.git 项目源码，我放在了项目下： vendors/claude-code-agent-sdk
 
 
 先参考理解下我列的几个项目，我想参考 ：https://github.com/zed-industries/claude-code-acp.git 这个zed官方typescript语言实现的claude code的ACP协议agent，实现一个rust语言的ACP协议的agent。

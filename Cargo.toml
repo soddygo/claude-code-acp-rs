@@ -3,7 +3,7 @@ name = "claude-code-acp-rs"
 version = "0.1.0"
 authors = ["guochao.song <soddygo@qq.com>"]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.90"
 description = "Use Claude Code from any ACP client - A Rust implementation of Claude Code ACP Agent"
 repository = "https://github.com/soddygo/claude-code-acp-rs"
 homepage = "https://github.com/soddygo/claude-code-acp-rs"
@@ -19,16 +19,16 @@ name = "claude_code_acp"
 path = "src/lib.rs"
 
 [[bin]]
-name = "claude-code-acp"
+name = "claude-code-acp-rs"
 path = "src/main.rs"
 
 [dependencies]
-# ACP Protocol SDK
-sacp = { path = "vendors/acp-rust-sdk/src/sacp" }
-sacp-tokio = { path = "vendors/acp-rust-sdk/src/sacp-tokio" }
+# ACP Protocol SDK (sacp re-exports agent-client-protocol-schema types via sacp::schema)
+# Enable unstable features for session modes and models support
+sacp = { git = "https://github.com/agentclientprotocol/rust-sdk.git", branch = "main", features = ["unstable"] }
 
 # Claude Agent SDK
-claude-agent-sdk-rs = { path = "vendors/claude-agent-sdk-rs" }
+claude-code-agent-sdk = { version = "0.1.10" }
 
 # Async runtime
 tokio = { version = "1.48", features = [
@@ -36,6 +36,7 @@ tokio = { version = "1.48", features = [
     "rt-multi-thread",
     "process",
     "io-util",
+    "io-std",
     "sync",
     "time",
     "fs",
@@ -66,11 +67,39 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # UUID generation
 uuid = { version = "1.19", features = ["v4"] }
 
+# Home directory detection
+dirs = "6.0"
+
 # File diff generation
 similar = "2.7"
 
 # Glob pattern matching
 globset = "0.4"
+
+# File system traversal
+walkdir = "2.5"
+
+# Regular expressions (for rule parsing)
+regex = "1.10"
+
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Time formatting for log filename
+chrono = "0.4"
+
+# File system watching (notify 7 is compatible with notify-debouncer-mini)
+notify = "7"
+notify-debouncer-mini = "0.5"
+
+# TTY detection
+atty = "0.2"
+
+# OpenTelemetry (optional, for distributed tracing)
+opentelemetry = { version = "0.30", optional = true }
+opentelemetry_sdk = { version = "0.30", features = ["rt-tokio"], optional = true }
+opentelemetry-otlp = { version = "0.30", features = ["grpc-tonic", "http-proto"], optional = true }
+tracing-opentelemetry = { version = "0.31", optional = true }
 
 # MCP support (optional, for future use)
 # rmcp = { version = "0.8", features = ["server", "transport-io"], optional = true }
@@ -83,6 +112,7 @@ tempfile = "3"
 [features]
 default = []
 # mcp = ["rmcp"]
+otel = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "tracing-opentelemetry"]
 
 [lints.rust]
 future_incompatible = { level = "warn", priority = -1 }
@@ -97,9 +127,21 @@ pedantic = { level = "warn", priority = -1 }
 doc_markdown = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+must_use_candidate = "allow"
 needless_pass_by_value = "allow"
 similar_names = "allow"
 struct_field_names = "allow"
 too_many_lines = "allow"
 wildcard_imports = "allow"
 module_name_repetitions = "allow"
+return_self_not_must_use = "allow"
+unnecessary_literal_bound = "allow"
+trivially_copy_pass_by_ref = "allow"
+uninlined_format_args = "allow"
+format_push_string = "allow"
+map_unwrap_or = "allow"
+collapsible_if = "allow"
+manual_non_exhaustive = "allow"
+match_same_arms = "allow"
+redundant_closure_for_method_calls = "allow"
+unused_self = "allow"
