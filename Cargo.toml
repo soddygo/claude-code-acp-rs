@@ -1,19 +1,105 @@
 [package]
 name = "claude-code-acp-rs"
-version = "0.0.0"
+version = "0.1.0"
 authors = ["guochao.song <soddygo@qq.com>"]
 edition = "2024"
-description = "Use Claude Code from any ACP client"
+rust-version = "1.85"
+description = "Use Claude Code from any ACP client - A Rust implementation of Claude Code ACP Agent"
 repository = "https://github.com/soddygo/claude-code-acp-rs"
+homepage = "https://github.com/soddygo/claude-code-acp-rs"
+documentation = "https://docs.rs/claude-code-acp-rs"
 license = "MIT"
+readme = "README.md"
+keywords = ["claude", "acp", "agent", "ai", "anthropic"]
+categories = ["development-tools", "api-bindings", "asynchronous"]
+include = ["src/**/*.rs", "Cargo.toml", "LICENSE", "README.md"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-
-[dev-dependencies]
+[lib]
+name = "claude_code_acp"
+path = "src/lib.rs"
 
 [[bin]]
+name = "claude-code-acp"
 path = "src/main.rs"
-name = "claude_code_acp_rs-cli"
 
+[dependencies]
+# ACP Protocol SDK
+sacp = { path = "vendors/acp-rust-sdk/src/sacp" }
+sacp-tokio = { path = "vendors/acp-rust-sdk/src/sacp-tokio" }
+
+# Claude Agent SDK
+claude-agent-sdk-rs = { path = "vendors/claude-agent-sdk-rs" }
+
+# Async runtime
+tokio = { version = "1.48", features = [
+    "macros",
+    "rt-multi-thread",
+    "process",
+    "io-util",
+    "sync",
+    "time",
+    "fs",
+] }
+tokio-util = { version = "0.7", features = ["compat"] }
+
+# Async utilities
+async-trait = "0.1"
+futures = "0.3"
+async-stream = "0.3"
+pin-project = "1.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Concurrent collections
+dashmap = "6.1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# UUID generation
+uuid = { version = "1.19", features = ["v4"] }
+
+# File diff generation
+similar = "2.7"
+
+# Glob pattern matching
+globset = "0.4"
+
+# MCP support (optional, for future use)
+# rmcp = { version = "0.8", features = ["server", "transport-io"], optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+pretty_assertions = "1"
+tempfile = "3"
+
+[features]
+default = []
+# mcp = ["rmcp"]
+
+[lints.rust]
+future_incompatible = { level = "warn", priority = -1 }
+let-underscore = "warn"
+missing_debug_implementations = "warn"
+nonstandard_style = { level = "warn", priority = -1 }
+rust_2018_idioms = { level = "warn", priority = -1 }
+unused = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+doc_markdown = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+needless_pass_by_value = "allow"
+similar_names = "allow"
+struct_field_names = "allow"
+too_many_lines = "allow"
+wildcard_imports = "allow"
+module_name_repetitions = "allow"

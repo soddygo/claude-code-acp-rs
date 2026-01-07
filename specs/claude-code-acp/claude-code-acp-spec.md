@@ -22,7 +22,7 @@
 - 遵守 SOLID 原则
 - 遵守 "Fail Fast" 原则
 - 使用 dashmap 处理并发 Map 操作
-- **Workspace 结构**: 项目采用 Cargo Workspace 架构，`crates/` 目录下包含多个独立模块
+- **单一 Crate 结构**: 项目作为单一 crate 发布到 crates.io，便于用户使用
 - **依赖统一管理**: 根目录 Cargo.toml 使用 `[workspace.dependencies]` 统一管理依赖版本
 
 ### 1.4 业务要求
@@ -49,6 +49,114 @@
 
 - 使用 `rmcp` 作为 MCP 协议实现库（替代 sacp-rmcp）
 - 参考 `vendors/acp-rust-sdk/src/sacp-rmcp` 的集成方式
+
+#### 1.4.4 Meta 字段支持
+
+ACP 协议的 `new_session` 和 `load_session` 请求中，`_meta` 字段用于传递额外配置信息：
+
+**1. 系统提示词 (systemPrompt)**
+
+允许客户端通过 meta 字段追加系统提示词：
+
+```rust
+/// Meta 中的系统提示词结构
+/// meta._meta.systemPrompt.append = "自定义系统提示词"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemPromptMeta {
+    /// 追加到系统提示词末尾的内容
+    pub append: Option<String>,
+    /// 替换整个系统提示词（优先级高于 append）
+    pub replace: Option<String>,
+}
+
+impl SystemPromptMeta {
+    /// 从 meta JSON 解析系统提示词配置
+    pub fn from_meta(meta: &serde_json::Value) -> Option<Self> {
+        meta.get("systemPrompt")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+}
+```
+
+**2. 恢复会话 (resume session_id)**
+
+允许客户端恢复之前的会话：
+
+```rust
+/// Meta 中的 Claude Code 选项结构
+/// meta._meta.claudeCode.options.resume = "session-uuid"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeCodeMeta {
+    pub options: Option<ClaudeCodeOptions>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeCodeOptions {
+    /// 要恢复的会话 ID
+    pub resume: Option<String>,
+}
+
+impl ClaudeCodeMeta {
+    /// 从 meta JSON 解析 Claude Code 配置
+    pub fn from_meta(meta: &serde_json::Value) -> Option<Self> {
+        meta.get("claudeCode")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+
+    /// 获取要恢复的会话 ID
+    pub fn get_resume_session_id(&self) -> Option<&str> {
+        self.options.as_ref()?.resume.as_deref()
+    }
+}
+```
+
+**3. Meta 解析器**
+
+统一的 meta 字段解析接口：
+
+```rust
+/// 新会话请求的 Meta 配置
+pub struct NewSessionMeta {
+    /// 系统提示词配置
+    pub system_prompt: Option<SystemPromptMeta>,
+    /// Claude Code 特定配置
+    pub claude_code: Option<ClaudeCodeMeta>,
+}
+
+impl NewSessionMeta {
+    /// 从 ACP 请求的 _meta 字段解析
+    pub fn from_request_meta(meta: Option<&serde_json::Value>) -> Self {
+        let meta = match meta {
+            Some(m) => m,
+            None => return Self::default(),
+        };
+
+        Self {
+            system_prompt: SystemPromptMeta::from_meta(meta),
+            claude_code: ClaudeCodeMeta::from_meta(meta),
+        }
+    }
+
+    /// 获取要追加的系统提示词
+    pub fn get_system_prompt_append(&self) -> Option<&str> {
+        self.system_prompt.as_ref()?.append.as_deref()
+    }
+
+    /// 获取要恢复的会话 ID
+    pub fn get_resume_session_id(&self) -> Option<&str> {
+        self.claude_code.as_ref()?.get_resume_session_id()
+    }
+}
+
+impl Default for NewSessionMeta {
+    fn default() -> Self {
+        Self {
+            system_prompt: None,
+            claude_code: None,
+        }
+    }
+}
+```
 
 ### 1.5 Claude SDK 集成概要
 
@@ -236,72 +344,62 @@ graph LR
 
 ## 3. 核心模块设计
 
-### 3.1 Workspace 结构
+### 3.1 项目结构
 
-项目采用 Cargo Workspace 架构，各模块作为独立 crate 存放在 `crates/` 目录下。
-
-**命名约定**: crate 名称简洁明了，不重复项目前缀。
+项目作为单一 crate 发布到 crates.io，内部通过模块组织代码。
 
 ```
 claude-code-acp-rs/
-├── Cargo.toml                    # Workspace 根配置
+├── Cargo.toml                    # 主配置（含 workspace.dependencies）
 ├── Cargo.lock
 ├── src/
-│   └── main.rs                   # CLI 入口 (简单包装)
-├── crates/
-│   ├── acp-agent/                # 核心 Agent 实现
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── agent.rs          # ClaudeAcpAgent 主结构
-│   │       ├── handlers.rs       # ACP 请求处理器
-│   │       ├── runner.rs         # 服务启动器
-│   │       └── config.rs         # 环境变量配置
+│   ├── main.rs                   # CLI 入口
+│   ├── lib.rs                    # 库入口，导出公共 API
 │   │
-│   ├── acp-session/              # 会话管理模块
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── manager.rs        # SessionManager
-│   │       ├── state.rs          # Session 状态
-│   │       ├── permission.rs     # 权限处理
-│   │       └── usage.rs          # Token 用量统计
+│   ├── agent/                    # Agent 核心模块
+│   │   ├── mod.rs
+│   │   ├── core.rs               # ClaudeAcpAgent 主结构
+│   │   ├── handlers.rs           # ACP 请求处理器
+│   │   └── runner.rs             # 服务启动器
 │   │
-│   ├── acp-converter/            # 消息转换模块
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── prompt.rs         # ACP → Claude SDK 转换
-│   │       ├── notification.rs   # Claude SDK → ACP 转换
-│   │       └── tool.rs           # 工具信息转换
+│   ├── session/                  # 会话管理模块
+│   │   ├── mod.rs
+│   │   ├── manager.rs            # SessionManager
+│   │   ├── state.rs              # Session 状态
+│   │   ├── permission.rs         # 权限处理
+│   │   └── usage.rs              # Token 用量统计
 │   │
-│   ├── acp-mcp/                  # 内置 MCP Server (使用 rmcp)
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── server.rs         # MCP Server 实现
-│   │       └── tools/
-│   │           ├── mod.rs
-│   │           ├── read.rs       # Read 工具
-│   │           ├── write.rs      # Write 工具
-│   │           ├── edit.rs       # Edit 工具
-│   │           └── bash.rs       # Bash 工具
+│   ├── converter/                # 消息转换模块
+│   │   ├── mod.rs
+│   │   ├── prompt.rs             # ACP → Claude SDK 转换
+│   │   ├── notification.rs       # Claude SDK → ACP 转换
+│   │   └── tool.rs               # 工具信息转换
 │   │
-│   ├── acp-settings/             # 设置管理模块
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       └── manager.rs        # SettingsManager
+│   ├── mcp/                      # 内置 MCP Server (使用 rmcp)
+│   │   ├── mod.rs
+│   │   ├── server.rs             # MCP Server 实现
+│   │   └── tools/
+│   │       ├── mod.rs
+│   │       ├── read.rs           # Read 工具
+│   │       ├── write.rs          # Write 工具
+│   │       ├── edit.rs           # Edit 工具
+│   │       └── bash.rs           # Bash 工具
 │   │
-│   └── acp-types/                # 公共类型定义
-│       ├── Cargo.toml
-│       └── src/
-│           ├── lib.rs
-│           ├── session.rs        # 会话相关类型
-│           ├── tool.rs           # 工具相关类型
-│           ├── notification.rs   # 通知相关类型
-│           ├── config.rs         # 配置类型
-│           └── error.rs          # 错误类型
+│   ├── settings/                 # 设置管理模块
+│   │   ├── mod.rs
+│   │   └── manager.rs            # SettingsManager
+│   │
+│   ├── types/                    # 公共类型定义
+│   │   ├── mod.rs
+│   │   ├── config.rs             # AgentConfig, 环境变量配置
+│   │   ├── meta.rs               # NewSessionMeta, SystemPromptMeta 等
+│   │   ├── session.rs            # TokenUsage, SessionStats 等
+│   │   ├── tool.rs               # ToolInfo, ToolKind 等
+│   │   ├── notification.rs       # 通知相关类型
+│   │   └── error.rs              # AgentError
+│   │
+│   └── util/                     # 工具函数
+│       └── mod.rs
 │
 ├── vendors/                      # 依赖的外部项目 (git submodule)
 │   ├── acp-rust-sdk/
@@ -313,18 +411,22 @@ claude-code-acp-rs/
     └── claude-code-acp/
 ```
 
-### 3.2 Crate 依赖关系图
+### 3.2 模块依赖关系图
 
 ```mermaid
 graph TB
-    subgraph "Workspace Crates"
-        CLI[src/main.rs<br/>CLI 入口]
-        Agent[acp-agent<br/>核心 Agent]
-        Session[acp-session<br/>会话管理]
-        Converter[acp-converter<br/>消息转换]
-        MCP[acp-mcp<br/>MCP Server]
-        Settings[acp-settings<br/>设置管理]
-        Types[acp-types<br/>公共类型]
+    subgraph "claude-code-acp-rs crate"
+        Main[main.rs<br/>CLI 入口]
+        Lib[lib.rs<br/>库入口]
+
+        subgraph "Core Modules"
+            Agent[agent/<br/>核心 Agent]
+            Session[session/<br/>会话管理]
+            Converter[converter/<br/>消息转换]
+            MCP[mcp/<br/>MCP Server]
+            Settings[settings/<br/>设置管理]
+            Types[types/<br/>公共类型]
+        end
     end
 
     subgraph "Vendor Dependencies"
@@ -333,7 +435,8 @@ graph TB
         RMCP[rmcp<br/>MCP 库]
     end
 
-    CLI --> Agent
+    Main --> Lib
+    Lib --> Agent
     Agent --> Session
     Agent --> Converter
     Agent --> MCP
@@ -354,16 +457,54 @@ graph TB
     Settings --> Types
 ```
 
-### 3.3 各 Crate 职责
+### 3.3 模块职责
 
-| Crate | 职责 | 主要依赖 |
-|-------|------|----------|
-| `acp-agent` | Agent 核心逻辑、ACP 请求处理、服务启动、环境变量配置 | sacp, claude-agent-sdk-rs, session, converter, mcp |
-| `acp-session` | 会话创建、管理、状态维护、权限处理、Token 用量统计 | claude-agent-sdk-rs, types |
-| `acp-converter` | ACP ↔ Claude SDK 消息格式转换 | types |
-| `acp-mcp` | 内置 MCP Server 及工具实现 | rmcp, types, session |
-| `acp-settings` | 用户设置读取与管理 | types |
-| `acp-types` | 公共类型、错误定义、配置结构、常量 | serde, thiserror |
+| 模块 | 职责 | 主要依赖 |
+|------|------|----------|
+| `agent` | Agent 核心逻辑、ACP 请求处理、服务启动 | sacp, claude-agent-sdk-rs, session, converter, mcp |
+| `session` | 会话创建、管理、状态维护、权限处理、Token 用量统计 | claude-agent-sdk-rs, types |
+| `converter` | ACP ↔ Claude SDK 消息格式转换 | types |
+| `mcp` | 内置 MCP Server 及工具实现 | rmcp, types, session |
+| `settings` | 用户设置读取与管理 | types |
+| `types` | 公共类型、错误定义、配置结构、Meta 解析、常量 | serde, thiserror |
+
+### 3.4 公共 API 导出 (lib.rs)
+
+```rust
+//! Claude Code ACP Agent
+//!
+//! 基于 Rust 实现的 ACP 协议 Claude Code Agent，
+//! 使任何 ACP 兼容的编辑器能够使用 Claude Code 的能力。
+//!
+//! ## 快速开始
+//!
+//! ```no_run
+//! use claude_code_acp::run_acp;
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     run_acp().await
+//! }
+//! ```
+//!
+//! ## 环境变量配置
+//!
+//! - `ANTHROPIC_BASE_URL`: API 基础 URL
+//! - `ANTHROPIC_AUTH_TOKEN`: 认证 Token
+//! - `ANTHROPIC_MODEL`: 主模型名称
+//! - `ANTHROPIC_SMALL_FAST_MODEL`: 快速小模型名称
+
+pub mod agent;
+pub mod converter;
+pub mod mcp;
+pub mod session;
+pub mod settings;
+pub mod types;
+
+// Re-exports for convenience
+pub use agent::run_acp;
+pub use types::{AgentConfig, AgentError, NewSessionMeta};
+```
 
 ---
 
@@ -1407,41 +1548,30 @@ graph TB
 
 ## 9. 依赖设计
 
-### 9.1 Workspace 根 Cargo.toml
+### 9.1 Cargo.toml (单一 Crate)
 
 ```toml
-[workspace]
-resolver = "2"
-members = [
-    "crates/acp-agent",
-    "crates/acp-session",
-    "crates/acp-converter",
-    "crates/acp-mcp",
-    "crates/acp-settings",
-    "crates/acp-types",
-]
-
 [package]
-name = "claude-code-acp-rs"
+name = "claude-code-acp"
 version = "0.1.0"
 edition = "2024"
 authors = ["guochao.song <soddygo@qq.com>"]
-description = "Use Claude Code from any ACP client"
+description = "Use Claude Code from any ACP client - Rust implementation of ACP protocol agent"
 repository = "https://github.com/soddygo/claude-code-acp-rs"
 license = "MIT"
+keywords = ["claude", "acp", "agent", "ai", "llm"]
+categories = ["development-tools", "command-line-utilities"]
+readme = "README.md"
 
 [[bin]]
 name = "claude-code-acp"
 path = "src/main.rs"
 
-[dependencies]
-acp-agent = { path = "crates/acp-agent" }
-tokio = { workspace = true }
-tracing-subscriber = { workspace = true }
-anyhow = { workspace = true }
+[lib]
+name = "claude_code_acp"
+path = "src/lib.rs"
 
-# Workspace 共享依赖（统一版本管理）
-[workspace.dependencies]
+[dependencies]
 # ACP Protocol
 sacp = { path = "vendors/acp-rust-sdk/src/sacp" }
 sacp-tokio = { path = "vendors/acp-rust-sdk/src/sacp-tokio" }
@@ -1455,6 +1585,7 @@ rmcp = "0.1"  # 使用最新版本的 rmcp
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
+async-stream = "0.3"
 
 # Concurrency
 dashmap = "6"
@@ -1472,91 +1603,41 @@ uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Workspace crates (内部依赖)
-acp-agent = { path = "crates/acp-agent" }
-acp-session = { path = "crates/acp-session" }
-acp-converter = { path = "crates/acp-converter" }
-acp-mcp = { path = "crates/acp-mcp" }
-acp-settings = { path = "crates/acp-settings" }
-acp-types = { path = "crates/acp-types" }
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"
 ```
 
-### 9.2 核心 Crate (acp-agent) Cargo.toml
+### 9.2 Feature Flags (可选)
 
 ```toml
-[package]
-name = "acp-agent"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-# Workspace crates
-acp-session = { workspace = true }
-acp-converter = { workspace = true }
-acp-mcp = { workspace = true }
-acp-settings = { workspace = true }
-acp-types = { workspace = true }
-
-# External dependencies
-sacp = { workspace = true }
-sacp-tokio = { workspace = true }
-claude-agent-sdk-rs = { workspace = true }
-tokio = { workspace = true }
-futures = { workspace = true }
-dashmap = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tracing = { workspace = true }
-uuid = { workspace = true }
-anyhow = { workspace = true }
+[features]
+default = ["mcp"]
+# 启用内置 MCP Server
+mcp = ["rmcp"]
+# 启用完整日志
+full-logging = ["tracing-subscriber/json"]
 ```
 
-### 9.3 Session Crate (acp-session) Cargo.toml
+### 9.3 发布到 crates.io
+
+发布前检查清单：
+
+1. **更新版本号**: `Cargo.toml` 中的 `version`
+2. **更新 CHANGELOG**: 记录变更
+3. **确保文档完整**: `README.md`, rustdoc
+4. **运行测试**: `cargo test`
+5. **检查 lint**: `cargo clippy`
+6. **dry-run 发布**: `cargo publish --dry-run`
+7. **正式发布**: `cargo publish`
+
+注意：vendors 目录下的依赖在发布时需要使用 crates.io 版本或 git 依赖：
 
 ```toml
-[package]
-name = "acp-session"
-version = "0.1.0"
-edition = "2024"
-
+# 发布版本的依赖配置
 [dependencies]
-acp-types = { workspace = true }
-claude-agent-sdk-rs = { workspace = true }
-tokio = { workspace = true }
-dashmap = { workspace = true }
-tracing = { workspace = true }
-```
-
-### 9.4 MCP Crate (acp-mcp) Cargo.toml
-
-```toml
-[package]
-name = "acp-mcp"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-acp-types = { workspace = true }
-acp-session = { workspace = true }
-rmcp = { workspace = true }
-tokio = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tracing = { workspace = true }
-```
-
-### 9.5 Types Crate (acp-types) Cargo.toml
-
-```toml
-[package]
-name = "acp-types"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-serde = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
+sacp = "0.1"  # 发布到 crates.io 后使用版本号
+claude-agent-sdk-rs = { git = "https://github.com/soddygo/claude-agent-sdk-rs.git", tag = "v0.1.0" }
 ```
 
 ---
@@ -1665,29 +1746,32 @@ graph TB
 
 ## 12. 后续扩展
 
-### 12.1 Phase 1 - MVP (Workspace 基础搭建)
+### 12.1 Phase 1 - MVP (基础搭建)
 
-- [ ] 创建 Workspace 结构和所有 crate 骨架
-- [ ] 实现 `acp-types` 公共类型（含 AgentConfig、TokenUsage）
-- [ ] 实现 `acp-agent` 环境变量配置加载
+- [ ] 创建项目结构和所有模块骨架
+- [ ] 实现 `types/` 公共类型（含 AgentConfig、TokenUsage、NewSessionMeta）
+- [ ] 实现环境变量配置加载
+- [ ] 实现 Meta 字段解析（systemPrompt、resume session_id）
 - [ ] 实现基础 ACP 协议支持 (initialize, new_session, prompt, cancel)
 - [ ] Claude SDK 集成
-- [ ] 基本通知转换 (`acp-converter`)
+- [ ] 基本通知转换 (`converter/`)
 
 ### 12.2 Phase 2 - 功能完善
 
-- [ ] `acp-mcp` MCP Server 工具实现（使用 rmcp）
-- [ ] `acp-session` 权限系统完善
-- [ ] `acp-session` Token 用量统计
-- [ ] 会话 Fork/Resume 支持
-- [ ] `acp-settings` 设置管理实现
+- [ ] `mcp/` MCP Server 工具实现（使用 rmcp）
+- [ ] `session/` 权限系统完善
+- [ ] `session/` Token 用量统计
+- [ ] 会话 Fork/Resume 支持（使用 meta.claudeCode.options.resume）
+- [ ] `settings/` 设置管理实现
 
-### 12.3 Phase 3 - 优化与测试
+### 12.3 Phase 3 - 优化与发布
 
 - [ ] 性能优化
 - [ ] 更完善的错误处理
 - [ ] 日志和监控
 - [ ] 单元测试和集成测试
+- [ ] rustdoc 文档完善
+- [ ] 发布到 crates.io
 
 ---
 
