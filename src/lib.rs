@@ -25,7 +25,8 @@
 //! ## Environment Variables
 //!
 //! - `ANTHROPIC_BASE_URL`: Custom API base URL
-//! - `ANTHROPIC_AUTH_TOKEN`: Authentication token
+//! - `ANTHROPIC_API_KEY`: API key (preferred)
+//! - `ANTHROPIC_AUTH_TOKEN`: Auth token (legacy, fallback)
 //! - `ANTHROPIC_MODEL`: Model to use (default: claude-sonnet-4-20250514)
 //! - `ANTHROPIC_SMALL_FAST_MODEL`: Model for fast operations
 
@@ -39,7 +40,7 @@ pub mod settings;
 pub mod terminal;
 pub mod types;
 
-pub use agent::{run_acp, run_acp_with_cli};
+pub use agent::{run_acp, run_acp_with_cli, shutdown_otel};
 pub use cli::Cli;
 pub use hooks::{create_post_tool_use_hook, create_pre_tool_use_hook, HookCallbackRegistry};
 pub use mcp::{AcpMcpServer, McpServer, ToolContext, ToolRegistry, ToolResult, get_disallowed_tools};

@@ -10,4 +10,4 @@ mod handlers;
 mod runner;
 
 pub use core::ClaudeAcpAgent;
-pub use runner::{run_acp, run_acp_with_cli};
+pub use runner::{run_acp, run_acp_with_cli, shutdown_otel};

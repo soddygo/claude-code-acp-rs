@@ -12,9 +12,9 @@ pub struct AgentConfig {
     /// Environment variable: `ANTHROPIC_BASE_URL`
     pub base_url: Option<String>,
 
-    /// Authentication token
-    /// Environment variable: `ANTHROPIC_AUTH_TOKEN`
-    pub auth_token: Option<String>,
+    /// API key for authentication
+    /// Environment variable: `ANTHROPIC_API_KEY` (preferred) or `ANTHROPIC_AUTH_TOKEN` (legacy)
+    pub api_key: Option<String>,
 
     /// Primary model name
     /// Environment variable: `ANTHROPIC_MODEL`
@@ -35,13 +35,19 @@ impl AgentConfig {
     ///
     /// Reads the following environment variables:
     /// - `ANTHROPIC_BASE_URL`: API base URL
-    /// - `ANTHROPIC_AUTH_TOKEN`: Authentication token
+    /// - `ANTHROPIC_API_KEY`: API key (preferred)
+    /// - `ANTHROPIC_AUTH_TOKEN`: Auth token (legacy, fallback if API_KEY not set)
     /// - `ANTHROPIC_MODEL`: Primary model name
     /// - `ANTHROPIC_SMALL_FAST_MODEL`: Small/fast model name
     pub fn from_env() -> Self {
+        // Prefer ANTHROPIC_API_KEY, fallback to ANTHROPIC_AUTH_TOKEN for compatibility
+        let api_key = std::env::var("ANTHROPIC_API_KEY")
+            .ok()
+            .or_else(|| std::env::var("ANTHROPIC_AUTH_TOKEN").ok());
+
         Self {
             base_url: std::env::var("ANTHROPIC_BASE_URL").ok(),
-            auth_token: std::env::var("ANTHROPIC_AUTH_TOKEN").ok(),
+            api_key,
             model: std::env::var("ANTHROPIC_MODEL").ok(),
             small_fast_model: std::env::var("ANTHROPIC_SMALL_FAST_MODEL").ok(),
         }
@@ -50,7 +56,7 @@ impl AgentConfig {
     /// Check if any configuration is set
     pub fn is_configured(&self) -> bool {
         self.base_url.is_some()
-            || self.auth_token.is_some()
+            || self.api_key.is_some()
             || self.model.is_some()
             || self.small_fast_model.is_some()
     }
@@ -65,8 +71,9 @@ impl AgentConfig {
         if let Some(ref url) = self.base_url {
             env.insert("ANTHROPIC_BASE_URL".to_string(), url.clone());
         }
-        if let Some(ref token) = self.auth_token {
-            env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), token.clone());
+        // Pass as ANTHROPIC_API_KEY (standard name for Claude CLI)
+        if let Some(ref key) = self.api_key {
+            env.insert("ANTHROPIC_API_KEY".to_string(), key.clone());
         }
         if let Some(ref model) = self.model {
             env.insert("ANTHROPIC_MODEL".to_string(), model.clone());
@@ -92,7 +99,7 @@ impl AgentConfig {
             options.fallback_model = Some(fallback.clone());
         }
 
-        // Pass base_url and auth_token as environment variables
+        // Pass base_url and api_key as environment variables
         let env_vars = self.to_env_vars();
         if !env_vars.is_empty() {
             options.env = env_vars;
@@ -108,7 +115,7 @@ mod tests {
     fn test_default_config() {
         let config = AgentConfig::default();
         assert!(config.base_url.is_none());
-        assert!(config.auth_token.is_none());
+        assert!(config.api_key.is_none());
         assert!(config.model.is_none());
         assert!(config.small_fast_model.is_none());
         assert!(!config.is_configured());
@@ -118,14 +125,14 @@ mod tests {
     fn test_to_env_vars() {
         let config = AgentConfig {
             base_url: Some("https://api.example.com".to_string()),
-            auth_token: Some("secret-token".to_string()),
+            api_key: Some("secret-key".to_string()),
             model: Some("claude-3".to_string()),
             small_fast_model: None,
         };
 
         let env = config.to_env_vars();
         assert_eq!(env.get("ANTHROPIC_BASE_URL").unwrap(), "https://api.example.com");
-        assert_eq!(env.get("ANTHROPIC_AUTH_TOKEN").unwrap(), "secret-token");
+        assert_eq!(env.get("ANTHROPIC_API_KEY").unwrap(), "secret-key");
         assert_eq!(env.get("ANTHROPIC_MODEL").unwrap(), "claude-3");
         assert!(!env.contains_key("ANTHROPIC_SMALL_FAST_MODEL"));
     }

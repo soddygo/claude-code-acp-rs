@@ -399,7 +399,7 @@ mod tests {
     fn test_config() -> AgentConfig {
         AgentConfig {
             base_url: None,
-            auth_token: None,
+            api_key: None,
             model: None,
             small_fast_model: None,
         }

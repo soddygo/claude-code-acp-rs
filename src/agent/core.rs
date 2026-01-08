@@ -79,7 +79,7 @@ mod tests {
     fn test_agent_with_config() {
         let config = AgentConfig {
             base_url: Some("https://api.example.com".to_string()),
-            auth_token: Some("test-token".to_string()),
+            api_key: Some("test-key".to_string()),
             model: Some("claude-3-opus".to_string()),
             small_fast_model: None,
         };

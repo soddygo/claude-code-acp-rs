@@ -19,13 +19,44 @@ use crate::cli::Cli;
 
 // OpenTelemetry imports (only when feature is enabled)
 #[cfg(feature = "otel")]
+use opentelemetry::global;
+#[cfg(feature = "otel")]
 use opentelemetry::trace::TracerProvider;
 #[cfg(feature = "otel")]
 use opentelemetry_otlp::WithExportConfig;
 #[cfg(feature = "otel")]
 use opentelemetry_sdk::trace::SdkTracerProvider;
 
+// Global storage for OpenTelemetry provider (for proper shutdown)
+#[cfg(feature = "otel")]
+static OTEL_PROVIDER: std::sync::OnceLock<SdkTracerProvider> = std::sync::OnceLock::new();
+
+/// Shutdown OpenTelemetry provider (flush all pending spans)
+///
+/// This should be called before the application exits to ensure all
+/// telemetry data is properly flushed to the backend.
+#[cfg(feature = "otel")]
+pub fn shutdown_otel() {
+    if let Some(provider) = OTEL_PROVIDER.get() {
+        tracing::info!("Shutting down OpenTelemetry provider...");
+        if let Err(e) = provider.shutdown() {
+            eprintln!("Failed to shutdown OpenTelemetry provider: {:?}", e);
+        } else {
+            tracing::info!("OpenTelemetry provider shutdown complete");
+        }
+    }
+}
+
+/// Shutdown OpenTelemetry provider (no-op when feature is disabled)
+#[cfg(not(feature = "otel"))]
+pub fn shutdown_otel() {}
+
 /// Initialize OpenTelemetry tracer provider
+///
+/// Following OpenTelemetry Rust best practices:
+/// 1. Create provider with batch exporter for production use
+/// 2. Set global tracer provider for easy access
+/// 3. Store provider for proper shutdown
 #[cfg(feature = "otel")]
 fn init_otel(endpoint: &str, service_name: &str) -> anyhow::Result<SdkTracerProvider> {
     use opentelemetry_sdk::Resource;
@@ -43,6 +74,9 @@ fn init_otel(endpoint: &str, service_name: &str) -> anyhow::Result<SdkTracerProv
                 .build(),
         )
         .build();
+
+    // Set global tracer provider (best practice)
+    global::set_tracer_provider(provider.clone());
 
     Ok(provider)
 }
@@ -99,8 +133,8 @@ fn init_logging_to_file(cli: &Cli) -> anyhow::Result<()> {
             let tracer = provider.tracer("claude-code-acp-rs");
             let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
-            // Store provider globally for shutdown
-            std::mem::forget(provider);
+            // Store provider globally for proper shutdown
+            drop(OTEL_PROVIDER.set(provider));
 
             tracing_subscriber::registry()
                 .with(filter)
@@ -149,8 +183,8 @@ fn init_logging_to_stderr(cli: &Cli) {
             let tracer = provider.tracer("claude-code-acp-rs");
             let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
-            // Store provider globally for shutdown
-            std::mem::forget(provider);
+            // Store provider globally for proper shutdown
+            drop(OTEL_PROVIDER.set(provider));
 
             tracing_subscriber::registry()
                 .with(filter)
