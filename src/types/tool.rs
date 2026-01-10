@@ -111,7 +111,8 @@ impl ToolInfo {
 
     /// Add text content
     pub fn with_text(mut self, text: impl Into<String>) -> Self {
-        self.content.push(ToolInfoContent::Text { text: text.into() });
+        self.content
+            .push(ToolInfoContent::Text { text: text.into() });
         self
     }
 }
@@ -171,10 +172,7 @@ mod tests {
 
     #[test]
     fn test_tool_kind_serialization() {
-        assert_eq!(
-            serde_json::to_string(&ToolKind::Read).unwrap(),
-            "\"read\""
-        );
+        assert_eq!(serde_json::to_string(&ToolKind::Read).unwrap(), "\"read\"");
         assert_eq!(
             serde_json::to_string(&ToolKind::Execute).unwrap(),
             "\"execute\""

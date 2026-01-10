@@ -20,7 +20,7 @@ mod web_search;
 mod write;
 
 pub use base::Tool;
-pub use bash::{contains_shell_operator, BashTool};
+pub use bash::{BashTool, contains_shell_operator};
 pub use bash_output::BashOutputTool;
 pub use edit::EditTool;
 pub use exit_plan_mode::ExitPlanModeTool;

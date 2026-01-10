@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 
 use super::base::Tool;
@@ -101,11 +101,7 @@ impl NotebookReadTool {
 
         for (i, cell) in notebook.cells.iter().enumerate() {
             // Cell header
-            output.push_str(&format!(
-                "--- Cell {} ({}) ---\n",
-                i + 1,
-                cell.cell_type
-            ));
+            output.push_str(&format!("--- Cell {} ({}) ---\n", i + 1, cell.cell_type));
 
             if let Some(id) = &cell.id {
                 output.push_str(&format!("ID: {}\n", id));
@@ -259,16 +255,14 @@ impl Tool for NotebookReadTool {
                 return ToolResult::error(format!(
                     "Failed to read notebook '{}': {}",
                     params.notebook_path, e
-                ))
+                ));
             }
         };
 
         // Parse as notebook
         let notebook: Notebook = match serde_json::from_str(&content) {
             Ok(n) => n,
-            Err(e) => {
-                return ToolResult::error(format!("Failed to parse notebook: {}", e))
-            }
+            Err(e) => return ToolResult::error(format!("Failed to parse notebook: {}", e)),
         };
 
         // Format for display
@@ -340,10 +334,12 @@ mod tests {
 
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["notebook_path"].is_object());
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("notebook_path")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("notebook_path"))
+        );
     }
 
     #[tokio::test]

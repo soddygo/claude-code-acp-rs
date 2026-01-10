@@ -122,6 +122,7 @@ mod tests {
             api_key: None,
             model: None,
             small_fast_model: None,
+            max_thinking_tokens: None,
         }
     }
 
@@ -137,7 +138,12 @@ mod tests {
         let config = test_config();
 
         let session = manager
-            .create_session("session-1".to_string(), PathBuf::from("/tmp"), &config, None)
+            .create_session(
+                "session-1".to_string(),
+                PathBuf::from("/tmp"),
+                &config,
+                None,
+            )
             .unwrap();
 
         assert_eq!(session.session_id, "session-1");
@@ -151,7 +157,12 @@ mod tests {
         let config = test_config();
 
         manager
-            .create_session("session-1".to_string(), PathBuf::from("/tmp"), &config, None)
+            .create_session(
+                "session-1".to_string(),
+                PathBuf::from("/tmp"),
+                &config,
+                None,
+            )
             .unwrap();
 
         let session = manager.get_session("session-1");
@@ -168,7 +179,12 @@ mod tests {
         let config = test_config();
 
         manager
-            .create_session("session-1".to_string(), PathBuf::from("/tmp"), &config, None)
+            .create_session(
+                "session-1".to_string(),
+                PathBuf::from("/tmp"),
+                &config,
+                None,
+            )
             .unwrap();
 
         let result = manager.get_session_or_error("session-1");
@@ -184,7 +200,12 @@ mod tests {
         let config = test_config();
 
         manager
-            .create_session("session-1".to_string(), PathBuf::from("/tmp"), &config, None)
+            .create_session(
+                "session-1".to_string(),
+                PathBuf::from("/tmp"),
+                &config,
+                None,
+            )
             .unwrap();
 
         assert!(manager.has_session("session-1"));
@@ -201,7 +222,12 @@ mod tests {
         let config = test_config();
 
         manager
-            .create_session("session-1".to_string(), PathBuf::from("/tmp"), &config, None)
+            .create_session(
+                "session-1".to_string(),
+                PathBuf::from("/tmp"),
+                &config,
+                None,
+            )
             .unwrap();
 
         let duplicate = manager.create_session(
@@ -211,7 +237,10 @@ mod tests {
             None,
         );
 
-        assert!(matches!(duplicate, Err(AgentError::SessionAlreadyExists(_))));
+        assert!(matches!(
+            duplicate,
+            Err(AgentError::SessionAlreadyExists(_))
+        ));
     }
 
     #[test]
@@ -220,10 +249,20 @@ mod tests {
         let config = test_config();
 
         manager
-            .create_session("session-1".to_string(), PathBuf::from("/tmp"), &config, None)
+            .create_session(
+                "session-1".to_string(),
+                PathBuf::from("/tmp"),
+                &config,
+                None,
+            )
             .unwrap();
         manager
-            .create_session("session-2".to_string(), PathBuf::from("/tmp"), &config, None)
+            .create_session(
+                "session-2".to_string(),
+                PathBuf::from("/tmp"),
+                &config,
+                None,
+            )
             .unwrap();
 
         let ids = manager.session_ids();
@@ -238,10 +277,20 @@ mod tests {
         let config = test_config();
 
         manager
-            .create_session("session-1".to_string(), PathBuf::from("/tmp"), &config, None)
+            .create_session(
+                "session-1".to_string(),
+                PathBuf::from("/tmp"),
+                &config,
+                None,
+            )
             .unwrap();
         manager
-            .create_session("session-2".to_string(), PathBuf::from("/tmp"), &config, None)
+            .create_session(
+                "session-2".to_string(),
+                PathBuf::from("/tmp"),
+                &config,
+                None,
+            )
             .unwrap();
 
         assert_eq!(manager.session_count(), 2);
@@ -256,7 +305,12 @@ mod tests {
         let config = test_config();
 
         manager
-            .create_session("session-1".to_string(), PathBuf::from("/tmp"), &config, None)
+            .create_session(
+                "session-1".to_string(),
+                PathBuf::from("/tmp"),
+                &config,
+                None,
+            )
             .unwrap();
 
         let result = manager.with_session("session-1", |session| session.session_id.clone());

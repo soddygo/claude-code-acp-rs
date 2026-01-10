@@ -174,7 +174,11 @@ impl PermissionHandler {
         // Check if tool is blocked in current mode
         if self.is_tool_blocked(tool_name) {
             return ToolPermissionResult::Blocked {
-                reason: format!("Tool {} is blocked in {} mode", tool_name, self.mode.as_str()),
+                reason: format!(
+                    "Tool {} is blocked in {} mode",
+                    tool_name,
+                    self.mode.as_str()
+                ),
             };
         }
 

@@ -226,10 +226,10 @@ fn init_logging(cli: &Cli) -> anyhow::Result<()> {
 /// It initializes logging based on CLI args and starts the ACP handler chain.
 pub async fn run_acp_with_cli(cli: &Cli) -> anyhow::Result<()> {
     let startup_time = std::time::Instant::now();
-    
+
     // Initialize logging first (must happen before any tracing)
     init_logging(cli)?;
-    
+
     // Record startup as a SHORT-LIVED span that closes immediately
     // This ensures it appears in Jaeger right away, not just when agent shuts down
     {
@@ -241,16 +241,14 @@ pub async fn run_acp_with_cli(cli: &Cli) -> anyhow::Result<()> {
             otel_enabled = %cli.otel_endpoint.is_some(),
         );
         let _enter = startup_span.enter();
-        
-        tracing::info!(
-            "========== Claude Code ACP Agent Starting =========="
-        );
+
+        tracing::info!("========== Claude Code ACP Agent Starting ==========");
         tracing::info!(
             version = %env!("CARGO_PKG_VERSION"),
             pid = %std::process::id(),
             "Agent process info"
         );
-        
+
         // Log CLI configuration
         if cli.is_diagnostic() {
             tracing::info!(
@@ -258,14 +256,14 @@ pub async fn run_acp_with_cli(cli: &Cli) -> anyhow::Result<()> {
                 "Diagnostic mode enabled"
             );
         }
-        
+
         if let Some(otel_endpoint) = &cli.otel_endpoint {
             tracing::info!(
                 otel_endpoint = %otel_endpoint,
                 "OpenTelemetry tracing enabled"
             );
         }
-        
+
         // Log startup timing
         let init_elapsed = startup_time.elapsed();
         tracing::info!(
@@ -273,16 +271,16 @@ pub async fn run_acp_with_cli(cli: &Cli) -> anyhow::Result<()> {
             "Logging initialized"
         );
     } // <-- startup_span closes here and gets exported to Jaeger immediately!
-    
+
     // Emit a separate "agent ready" trace that will show in Jaeger
     emit_agent_ready_trace(startup_time.elapsed()).await;
-    
+
     // Run the server (this is a long-running span, won't appear until shutdown)
     let result = run_acp_server().await.map_err(Into::into);
-    
+
     // Emit shutdown trace
     emit_agent_shutdown_trace(startup_time.elapsed()).await;
-    
+
     result
 }
 
@@ -340,24 +338,33 @@ pub async fn run_acp() -> Result<(), sacp::Error> {
 #[tracing::instrument(name = "acp_server_main")]
 async fn run_acp_server() -> Result<(), sacp::Error> {
     let server_start_time = std::time::Instant::now();
-    
+
     // Check if running in interactive terminal (for debugging)
     let is_tty = atty::is(atty::Stream::Stdin);
 
     // Print startup banner for easy log identification
     let agent_session_id = uuid::Uuid::new_v4();
     let start_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-    
-    tracing::info!("================================================================================");
+
+    tracing::info!(
+        "================================================================================"
+    );
     tracing::info!("  Claude Code ACP Agent - Session Start");
-    tracing::info!("--------------------------------------------------------------------------------");
+    tracing::info!(
+        "--------------------------------------------------------------------------------"
+    );
     tracing::info!("  Version:    {}", env!("CARGO_PKG_VERSION"));
     tracing::info!("  Start Time: {}", start_time);
     tracing::info!("  Session ID: {}", agent_session_id);
     tracing::info!("  PID:        {}", std::process::id());
-    tracing::info!("  TTY Mode:   {}", if is_tty { "interactive" } else { "subprocess" });
-    tracing::info!("================================================================================");
-    
+    tracing::info!(
+        "  TTY Mode:   {}",
+        if is_tty { "interactive" } else { "subprocess" }
+    );
+    tracing::info!(
+        "================================================================================"
+    );
+
     // Log environment info
     tracing::debug!(
         rust_log = ?std::env::var("RUST_LOG").ok(),
@@ -383,7 +390,7 @@ async fn run_acp_server() -> Result<(), sacp::Error> {
     let config = Arc::new(agent.config().clone());
     let sessions = agent.sessions().clone();
     let agent_create_elapsed = agent_create_start.elapsed();
-    
+
     tracing::info!(
         agent_name = %agent.name(),
         elapsed_ms = agent_create_elapsed.as_millis(),
@@ -407,7 +414,7 @@ async fn run_acp_server() -> Result<(), sacp::Error> {
                         "handle_initialize",
                         protocol_version = %protocol_version,
                     );
-                    
+
                     async {
                         tracing::info!(
                             "Received initialize request (protocol version: {})",
@@ -435,12 +442,13 @@ async fn run_acp_server() -> Result<(), sacp::Error> {
                         cwd = %cwd,
                         mcp_server_count = request.mcp_servers.len(),
                     );
-                    
+
                     async {
                         tracing::debug!("Received session/new request");
                         match handlers::handle_new_session(request, &config, &sessions).await {
                             Ok(response) => request_cx.respond(response),
-                            Err(e) => request_cx.respond_with_error(sacp::util::internal_error(e.to_string())),
+                            Err(e) => request_cx
+                                .respond_with_error(sacp::util::internal_error(e.to_string())),
                         }
                     }
                     .instrument(span)
@@ -460,15 +468,13 @@ async fn run_acp_server() -> Result<(), sacp::Error> {
                         "handle_session_load",
                         session_id = %session_id,
                     );
-                    
+
                     async {
-                        tracing::debug!(
-                            "Received session/load request for session {}",
-                            session_id
-                        );
+                        tracing::debug!("Received session/load request for session {}", session_id);
                         match handlers::handle_load_session(request, &config, &sessions) {
                             Ok(response) => request_cx.respond(response),
-                            Err(e) => request_cx.respond_with_error(sacp::util::internal_error(e.to_string())),
+                            Err(e) => request_cx
+                                .respond_with_error(sacp::util::internal_error(e.to_string())),
                         }
                     }
                     .instrument(span)
@@ -485,14 +491,14 @@ async fn run_acp_server() -> Result<(), sacp::Error> {
                 async move |request: PromptRequest, request_cx, connection_cx| {
                     let session_id = request.session_id.0.clone();
                     let prompt_len = request.prompt.len();
-                    
+
                     // Create a span for the entire request handling
                     let span = tracing::info_span!(
                         "handle_session_prompt",
                         session_id = %session_id,
                         prompt_blocks = prompt_len,
                     );
-                    
+
                     async {
                         tracing::debug!(
                             "Received session/prompt request for session {}",
@@ -500,11 +506,14 @@ async fn run_acp_server() -> Result<(), sacp::Error> {
                         );
 
                         // Handle the prompt with streaming
-                        match handlers::handle_prompt(request, &config, &sessions, connection_cx).await {
+                        match handlers::handle_prompt(request, &config, &sessions, connection_cx)
+                            .await
+                        {
                             Ok(response) => request_cx.respond(response),
                             Err(e) => {
                                 tracing::error!("Prompt error: {}", e);
-                                request_cx.respond_with_error(sacp::util::internal_error(e.to_string()))
+                                request_cx
+                                    .respond_with_error(sacp::util::internal_error(e.to_string()))
                             }
                         }
                     }
@@ -526,12 +535,13 @@ async fn run_acp_server() -> Result<(), sacp::Error> {
                         session_id = %session_id,
                         mode_id = %mode_id,
                     );
-                    
+
                     async {
                         tracing::debug!("Received session/setMode request");
                         match handlers::handle_set_mode(request, &sessions, connection_cx).await {
                             Ok(response) => request_cx.respond(response),
-                            Err(e) => request_cx.respond_with_error(sacp::util::internal_error(e.to_string())),
+                            Err(e) => request_cx
+                                .respond_with_error(sacp::util::internal_error(e.to_string())),
                         }
                     }
                     .instrument(span)
@@ -553,7 +563,7 @@ async fn run_acp_server() -> Result<(), sacp::Error> {
                         "handle_session_cancel",
                         session_id = %session_id,
                     );
-                    
+
                     async {
                         tracing::debug!(
                             "Received session/cancel notification for session {}",
@@ -578,10 +588,13 @@ async fn run_acp_server() -> Result<(), sacp::Error> {
                     "handle_unknown_message",
                     method = ?method,
                 );
-                
+
                 async {
                     tracing::warn!("Received unknown message: {:?}", method);
-                    message.respond_with_error(sacp::util::internal_error("Unknown method"), connection_cx)
+                    message.respond_with_error(
+                        sacp::util::internal_error("Unknown method"),
+                        connection_cx,
+                    )
                 }
                 .instrument(span)
                 .await

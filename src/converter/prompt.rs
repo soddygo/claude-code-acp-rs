@@ -25,10 +25,7 @@ impl PromptConverter {
     /// # Returns
     ///
     /// A vector of `UserContentBlock`s for the SDK
-    pub fn convert_content(
-        &self,
-        content: &[serde_json::Value],
-    ) -> Vec<UserContentBlock> {
+    pub fn convert_content(&self, content: &[serde_json::Value]) -> Vec<UserContentBlock> {
         content
             .iter()
             .filter_map(|item| self.convert_content_item(item))

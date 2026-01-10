@@ -4,26 +4,25 @@
 //! ClaudeClient instance, usage tracking, and permission state.
 
 use std::collections::HashMap;
+use std::error::Error;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use claude_code_agent_sdk::types::mcp::McpSdkServerConfig;
 use claude_code_agent_sdk::{
     ClaudeAgentOptions, ClaudeClient, HookEvent, HookMatcher, McpServerConfig, McpServers,
     SystemPrompt, SystemPromptPreset,
 };
-use claude_code_agent_sdk::types::mcp::McpSdkServerConfig;
+use sacp::JrConnectionCx;
 use sacp::link::AgentToClient;
 use sacp::schema::McpServer;
-use sacp::JrConnectionCx;
 use tokio::sync::RwLock;
 use tracing::instrument;
 
 use crate::converter::NotificationConverter;
-use crate::hooks::{
-    create_post_tool_use_hook, create_pre_tool_use_hook, HookCallbackRegistry,
-};
+use crate::hooks::{HookCallbackRegistry, create_post_tool_use_hook, create_pre_tool_use_hook};
 use crate::mcp::AcpMcpServer;
 use crate::settings::PermissionChecker;
 use crate::terminal::TerminalClient;
@@ -115,7 +114,7 @@ impl Session {
         meta: Option<&NewSessionMeta>,
     ) -> Result<Self> {
         let start_time = Instant::now();
-        
+
         tracing::info!(
             session_id = %session_id,
             cwd = ?cwd,
@@ -137,15 +136,24 @@ impl Session {
         let mut hooks_map: HashMap<HookEvent, Vec<HookMatcher>> = HashMap::new();
         hooks_map.insert(
             HookEvent::PreToolUse,
-            vec![HookMatcher::builder().hooks(vec![pre_tool_use_hook]).build()],
+            vec![
+                HookMatcher::builder()
+                    .hooks(vec![pre_tool_use_hook])
+                    .build(),
+            ],
         );
         hooks_map.insert(
             HookEvent::PostToolUse,
-            vec![HookMatcher::builder().hooks(vec![post_tool_use_hook]).build()],
+            vec![
+                HookMatcher::builder()
+                    .hooks(vec![post_tool_use_hook])
+                    .build(),
+            ],
         );
-        
-        tracing::debug!(
+
+        tracing::info!(
             session_id = %session_id,
+            hooks_count = 2,
             "Hooks configured: PreToolUse, PostToolUse"
         );
 
@@ -165,7 +173,7 @@ impl Session {
             }),
         );
 
-        tracing::debug!(
+        tracing::info!(
             session_id = %session_id,
             mcp_server_count = mcp_servers_dict.len(),
             "MCP servers configured"
@@ -217,7 +225,7 @@ impl Session {
 
         // Apply config from environment
         config.apply_to_options(&mut options);
-        
+
         tracing::debug!(
             session_id = %session_id,
             has_model = options.model.is_some(),
@@ -256,6 +264,16 @@ impl Session {
                     "Resuming from previous session"
                 );
             }
+
+            // Set max thinking tokens if provided (enables extended thinking mode)
+            if let Some(tokens) = meta.get_max_thinking_tokens() {
+                options.max_thinking_tokens = Some(tokens);
+                tracing::info!(
+                    session_id = %session_id,
+                    max_thinking_tokens = tokens,
+                    "Extended thinking mode enabled via meta"
+                );
+            }
         }
 
         // Create the client
@@ -286,7 +304,7 @@ impl Session {
             external_mcp_connected: AtomicBool::new(false),
         })
     }
-    
+
     /// Set external MCP servers to connect
     ///
     /// # Arguments
@@ -299,47 +317,47 @@ impl Session {
                 server_count = servers.len(),
                 "Storing external MCP servers for later connection"
             );
-            
-        for server in &servers {
-            match server {
-                McpServer::Stdio(s) => {
-                    tracing::debug!(
-                        session_id = %self.session_id,
-                        server_name = %s.name,
-                        command = ?s.command,
-                        args = ?s.args,
-                        "External MCP server (stdio)"
-                    );
-                }
-                McpServer::Http(s) => {
-                    tracing::debug!(
-                        session_id = %self.session_id,
-                        server_name = %s.name,
-                        url = %s.url,
-                        "External MCP server (http)"
-                    );
-                }
-                McpServer::Sse(s) => {
-                    tracing::debug!(
-                        session_id = %self.session_id,
-                        server_name = %s.name,
-                        url = %s.url,
-                        "External MCP server (sse)"
-                    );
-                }
-                _ => {
-                    tracing::debug!(
-                        session_id = %self.session_id,
-                        "External MCP server (unknown type)"
-                    );
+
+            for server in &servers {
+                match server {
+                    McpServer::Stdio(s) => {
+                        tracing::debug!(
+                            session_id = %self.session_id,
+                            server_name = %s.name,
+                            command = ?s.command,
+                            args = ?s.args,
+                            "External MCP server (stdio)"
+                        );
+                    }
+                    McpServer::Http(s) => {
+                        tracing::debug!(
+                            session_id = %self.session_id,
+                            server_name = %s.name,
+                            url = %s.url,
+                            "External MCP server (http)"
+                        );
+                    }
+                    McpServer::Sse(s) => {
+                        tracing::debug!(
+                            session_id = %self.session_id,
+                            server_name = %s.name,
+                            url = %s.url,
+                            "External MCP server (sse)"
+                        );
+                    }
+                    _ => {
+                        tracing::debug!(
+                            session_id = %self.session_id,
+                            "External MCP server (unknown type)"
+                        );
+                    }
                 }
             }
         }
-        }
-        
+
         *self.external_mcp_servers.write().await = servers;
     }
-    
+
     /// Connect to external MCP servers
     ///
     /// This should be called before the first prompt to ensure all
@@ -358,7 +376,7 @@ impl Session {
             );
             return Ok(());
         }
-        
+
         let servers = self.external_mcp_servers.read().await;
         if servers.is_empty() {
             tracing::debug!(
@@ -368,26 +386,26 @@ impl Session {
             self.external_mcp_connected.store(true, Ordering::SeqCst);
             return Ok(());
         }
-        
+
         let server_count = servers.len();
         let start_time = Instant::now();
-        
+
         tracing::info!(
             session_id = %self.session_id,
             server_count = server_count,
             "Connecting to external MCP servers"
         );
-        
+
         let external_manager = self.acp_mcp_server.mcp_server().external_manager();
-        
+
         let mut success_count = 0;
         let mut error_count = 0;
-        
+
         for server in servers.iter() {
             match server {
                 McpServer::Stdio(s) => {
                     let server_start = Instant::now();
-                    
+
                     tracing::info!(
                         session_id = %self.session_id,
                         server_name = %s.name,
@@ -395,14 +413,19 @@ impl Session {
                         args = ?s.args,
                         "Connecting to external MCP server (stdio)"
                     );
-                    
+
                     // Convert env variables
                     let env: Option<HashMap<String, String>> = if s.env.is_empty() {
                         None
                     } else {
-                        Some(s.env.iter().map(|e| (e.name.clone(), e.value.clone())).collect())
+                        Some(
+                            s.env
+                                .iter()
+                                .map(|e| (e.name.clone(), e.value.clone()))
+                                .collect(),
+                        )
                     };
-                    
+
                     match external_manager
                         .connect(
                             s.name.clone(),
@@ -460,7 +483,7 @@ impl Session {
                 }
             }
         }
-        
+
         let total_elapsed = start_time.elapsed();
         tracing::info!(
             session_id = %self.session_id,
@@ -470,7 +493,7 @@ impl Session {
             total_elapsed_ms = total_elapsed.as_millis(),
             "Finished connecting external MCP servers"
         );
-        
+
         self.external_mcp_connected.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -501,23 +524,27 @@ impl Session {
 
         let mut client = self.client.write().await;
         client.connect().await.map_err(|e| {
+            let agent_error = AgentError::from(e);
             tracing::error!(
                 session_id = %self.session_id,
-                error = %e,
+                error = %agent_error,
+                error_code = ?agent_error.error_code(),
+                is_retryable = %agent_error.is_retryable(),
+                error_chain = ?agent_error.source(),
                 "Failed to connect to Claude CLI"
             );
-            AgentError::from(e)
+            agent_error
         })?;
-        
+
         self.connected.store(true, Ordering::SeqCst);
-        
+
         let elapsed = start_time.elapsed();
         tracing::info!(
             session_id = %self.session_id,
             elapsed_ms = elapsed.as_millis(),
             "Successfully connected to Claude CLI"
         );
-        
+
         Ok(())
     }
 
@@ -544,23 +571,27 @@ impl Session {
 
         let mut client = self.client.write().await;
         client.disconnect().await.map_err(|e| {
+            let agent_error = AgentError::from(e);
             tracing::error!(
                 session_id = %self.session_id,
-                error = %e,
+                error = %agent_error,
+                error_code = ?agent_error.error_code(),
+                is_retryable = %agent_error.is_retryable(),
+                error_chain = ?agent_error.source(),
                 "Failed to disconnect from Claude CLI"
             );
-            AgentError::from(e)
+            agent_error
         })?;
-        
+
         self.connected.store(false, Ordering::SeqCst);
-        
+
         let elapsed = start_time.elapsed();
         tracing::info!(
             session_id = %self.session_id,
             elapsed_ms = elapsed.as_millis(),
             "Disconnected from Claude CLI"
         );
-        
+
         Ok(())
     }
 
@@ -595,7 +626,7 @@ impl Session {
             session_id = %self.session_id,
             "Cancelling session and sending interrupt signal"
         );
-        
+
         self.cancelled.store(true, Ordering::SeqCst);
 
         // Send interrupt signal to Claude CLI to stop current operation
@@ -754,6 +785,7 @@ mod tests {
             api_key: None,
             model: None,
             small_fast_model: None,
+            max_thinking_tokens: None,
         }
     }
 
@@ -801,7 +833,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(session.permission_mode().await, PermissionMode::Default);
-        session.set_permission_mode(PermissionMode::AcceptEdits).await;
+        session
+            .set_permission_mode(PermissionMode::AcceptEdits)
+            .await;
         assert_eq!(session.permission_mode().await, PermissionMode::AcceptEdits);
     }
 }

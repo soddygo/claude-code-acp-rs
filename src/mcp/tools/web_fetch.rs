@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::base::Tool;
 use crate::mcp::registry::{ToolContext, ToolResult};
@@ -143,14 +143,18 @@ mod tests {
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["url"].is_object());
         assert!(schema["properties"]["prompt"].is_object());
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("url")));
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("prompt")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("url"))
+        );
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("prompt"))
+        );
     }
 
     #[test]

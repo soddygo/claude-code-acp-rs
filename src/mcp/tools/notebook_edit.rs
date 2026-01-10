@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 
 use super::base::Tool;
@@ -155,16 +155,14 @@ impl Tool for NotebookEditTool {
                 return ToolResult::error(format!(
                     "Failed to read notebook '{}': {}",
                     params.notebook_path, e
-                ))
+                ));
             }
         };
 
         // Parse as notebook
         let mut notebook: Notebook = match serde_json::from_str(&content) {
             Ok(n) => n,
-            Err(e) => {
-                return ToolResult::error(format!("Failed to parse notebook: {}", e))
-            }
+            Err(e) => return ToolResult::error(format!("Failed to parse notebook: {}", e)),
         };
 
         let edit_mode = params.edit_mode.as_deref().unwrap_or("replace");
@@ -272,8 +270,11 @@ impl Tool for NotebookEditTool {
                     }
 
                     // Update source
-                    let lines: Vec<String> =
-                        params.new_source.lines().map(|l| format!("{}\n", l)).collect();
+                    let lines: Vec<String> = params
+                        .new_source
+                        .lines()
+                        .map(|l| format!("{}\n", l))
+                        .collect();
                     cell.source = if lines.len() == 1 {
                         Value::String(lines[0].clone())
                     } else {

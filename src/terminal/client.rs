@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use sacp::JrConnectionCx;
 use sacp::link::AgentToClient;
 use sacp::schema::{
     CreateTerminalRequest, CreateTerminalResponse, EnvVariable, KillTerminalCommandRequest,
@@ -13,7 +14,6 @@ use sacp::schema::{
     TerminalId, TerminalOutputRequest, TerminalOutputResponse, WaitForTerminalExitRequest,
     WaitForTerminalExitResponse,
 };
-use sacp::JrConnectionCx;
 use tracing::instrument;
 
 use crate::types::AgentError;
@@ -33,7 +33,10 @@ pub struct TerminalClient {
 
 impl TerminalClient {
     /// Create a new Terminal API client
-    pub fn new(connection_cx: JrConnectionCx<AgentToClient>, session_id: impl Into<SessionId>) -> Self {
+    pub fn new(
+        connection_cx: JrConnectionCx<AgentToClient>,
+        session_id: impl Into<SessionId>,
+    ) -> Self {
         Self {
             connection_cx,
             session_id: session_id.into(),
@@ -69,7 +72,7 @@ impl TerminalClient {
     ) -> Result<TerminalId, AgentError> {
         let start_time = Instant::now();
         let cmd: String = command.into();
-        
+
         tracing::info!(
             command = %cmd,
             args = ?args,
@@ -102,8 +105,10 @@ impl TerminalClient {
             .map_err(|e| {
                 let elapsed = start_time.elapsed();
                 tracing::error!(
+                    session_id = %self.session_id.0,
                     command = %cmd,
                     error = %e,
+                    error_type = %std::any::type_name::<sacp::Error>(),
                     elapsed_ms = elapsed.as_millis(),
                     "Terminal create request failed"
                 );
@@ -135,15 +140,16 @@ impl TerminalClient {
     ) -> Result<TerminalOutputResponse, AgentError> {
         let start_time = Instant::now();
         let tid: TerminalId = terminal_id.into();
-        
+
         tracing::debug!(
             terminal_id = %tid.0,
             "Getting terminal output"
         );
-        
+
         let request = TerminalOutputRequest::new(self.session_id.clone(), tid.clone());
 
-        let response = self.connection_cx
+        let response = self
+            .connection_cx
             .send_request(request)
             .block_task()
             .await
@@ -157,7 +163,7 @@ impl TerminalClient {
                 );
                 AgentError::Internal(format!("Terminal output failed: {}", e))
             })?;
-            
+
         let elapsed = start_time.elapsed();
         tracing::debug!(
             terminal_id = %tid.0,
@@ -166,7 +172,7 @@ impl TerminalClient {
             exit_status = ?response.exit_status,
             "Terminal output retrieved"
         );
-        
+
         Ok(response)
     }
 
@@ -184,15 +190,16 @@ impl TerminalClient {
     ) -> Result<WaitForTerminalExitResponse, AgentError> {
         let start_time = Instant::now();
         let tid: TerminalId = terminal_id.into();
-        
+
         tracing::info!(
             terminal_id = %tid.0,
             "Waiting for terminal command to exit"
         );
-        
+
         let request = WaitForTerminalExitRequest::new(self.session_id.clone(), tid.clone());
 
-        let response = self.connection_cx
+        let response = self
+            .connection_cx
             .send_request(request)
             .block_task()
             .await
@@ -206,7 +213,7 @@ impl TerminalClient {
                 );
                 AgentError::Internal(format!("Terminal wait_for_exit failed: {}", e))
             })?;
-            
+
         let elapsed = start_time.elapsed();
         tracing::info!(
             terminal_id = %tid.0,
@@ -214,7 +221,7 @@ impl TerminalClient {
             exit_status = ?response.exit_status,
             "Terminal command exited"
         );
-        
+
         Ok(response)
     }
 
@@ -233,15 +240,16 @@ impl TerminalClient {
     ) -> Result<KillTerminalCommandResponse, AgentError> {
         let start_time = Instant::now();
         let tid: TerminalId = terminal_id.into();
-        
+
         tracing::info!(
             terminal_id = %tid.0,
             "Killing terminal command"
         );
-        
+
         let request = KillTerminalCommandRequest::new(self.session_id.clone(), tid.clone());
 
-        let response = self.connection_cx
+        let response = self
+            .connection_cx
             .send_request(request)
             .block_task()
             .await
@@ -255,14 +263,14 @@ impl TerminalClient {
                 );
                 AgentError::Internal(format!("Terminal kill failed: {}", e))
             })?;
-            
+
         let elapsed = start_time.elapsed();
         tracing::info!(
             terminal_id = %tid.0,
             elapsed_ms = elapsed.as_millis(),
             "Terminal command killed"
         );
-        
+
         Ok(response)
     }
 
@@ -281,15 +289,16 @@ impl TerminalClient {
     ) -> Result<ReleaseTerminalResponse, AgentError> {
         let start_time = Instant::now();
         let tid: TerminalId = terminal_id.into();
-        
+
         tracing::debug!(
             terminal_id = %tid.0,
             "Releasing terminal"
         );
-        
+
         let request = ReleaseTerminalRequest::new(self.session_id.clone(), tid.clone());
 
-        let response = self.connection_cx
+        let response = self
+            .connection_cx
             .send_request(request)
             .block_task()
             .await
@@ -303,14 +312,14 @@ impl TerminalClient {
                 );
                 AgentError::Internal(format!("Terminal release failed: {}", e))
             })?;
-            
+
         let elapsed = start_time.elapsed();
         tracing::debug!(
             terminal_id = %tid.0,
             elapsed_ms = elapsed.as_millis(),
             "Terminal released"
         );
-        
+
         Ok(response)
     }
 

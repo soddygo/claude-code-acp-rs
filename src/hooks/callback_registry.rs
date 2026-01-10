@@ -96,8 +96,8 @@ impl std::fmt::Debug for HookCallbackRegistry {
 mod tests {
     use super::*;
     use futures::FutureExt;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[tokio::test]
     async fn test_register_and_execute() {
@@ -135,11 +135,7 @@ mod tests {
     async fn test_execute_nonexistent() {
         let registry = HookCallbackRegistry::new();
         let result = registry
-            .execute_post_tool_use(
-                "nonexistent",
-                serde_json::json!({}),
-                serde_json::json!({}),
-            )
+            .execute_post_tool_use("nonexistent", serde_json::json!({}), serde_json::json!({}))
             .await;
 
         assert!(!result);
@@ -148,8 +144,7 @@ mod tests {
     #[test]
     fn test_remove() {
         let registry = HookCallbackRegistry::new();
-        let callback: PostToolUseCallback =
-            Box::new(|_id, _input, _response| async {}.boxed());
+        let callback: PostToolUseCallback = Box::new(|_id, _input, _response| async {}.boxed());
 
         registry.register_post_tool_use("test-id".to_string(), callback);
         assert!(registry.has_callback("test-id"));

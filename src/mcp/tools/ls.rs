@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 
@@ -128,7 +128,7 @@ impl Tool for LsTool {
                     "Failed to read directory {}: {}",
                     target_path.display(),
                     e
-                ))
+                ));
             }
         };
 
@@ -243,7 +243,12 @@ mod tests {
 
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["path"].is_object());
-        assert!(schema["required"].as_array().unwrap().contains(&json!("path")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("path"))
+        );
     }
 
     #[tokio::test]
@@ -265,9 +270,7 @@ mod tests {
         let tool = LsTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool
-            .execute(json!({"path": "."}), &context)
-            .await;
+        let result = tool.execute(json!({"path": "."}), &context).await;
 
         assert!(!result.is_error);
         assert!(result.content.contains("src/"));
@@ -319,9 +322,7 @@ mod tests {
         let tool = LsTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool
-            .execute(json!({"path": "."}), &context)
-            .await;
+        let result = tool.execute(json!({"path": "."}), &context).await;
 
         assert!(!result.is_error);
         assert!(result.content.contains("empty") || result.content.contains("Total: 0"));
@@ -334,9 +335,7 @@ mod tests {
         let tool = LsTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool
-            .execute(json!({"path": "nonexistent"}), &context)
-            .await;
+        let result = tool.execute(json!({"path": "nonexistent"}), &context).await;
 
         assert!(result.is_error);
         assert!(result.content.contains("not found"));
@@ -345,7 +344,10 @@ mod tests {
     #[test]
     fn test_should_ignore() {
         // Exact match
-        assert!(LsTool::should_ignore("node_modules", &["node_modules".to_string()]));
+        assert!(LsTool::should_ignore(
+            "node_modules",
+            &["node_modules".to_string()]
+        ));
         assert!(!LsTool::should_ignore("src", &["node_modules".to_string()]));
 
         // Suffix pattern (*.ext)

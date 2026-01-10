@@ -11,6 +11,7 @@ use claude_code_agent_sdk::{
 };
 use futures::future::BoxFuture;
 use tokio::sync::RwLock;
+use tracing::Instrument;
 
 use crate::settings::PermissionChecker;
 
@@ -29,111 +30,152 @@ use crate::settings::PermissionChecker;
 pub fn create_pre_tool_use_hook(
     permission_checker: Arc<RwLock<PermissionChecker>>,
 ) -> HookCallback {
-    Arc::new(move |input: HookInput, tool_use_id: Option<String>, _context: HookContext| {
-        let permission_checker = permission_checker.clone();
+    Arc::new(
+        move |input: HookInput, tool_use_id: Option<String>, _context: HookContext| {
+            let permission_checker = permission_checker.clone();
 
-        Box::pin(async move {
-            let start_time = Instant::now();
-            
-            // Only handle PreToolUse events
-            let (tool_name, tool_input) = match &input {
-                HookInput::PreToolUse(pre_tool) => {
-                    (pre_tool.tool_name.clone(), pre_tool.tool_input.clone())
-                }
-                _ => {
-                    return HookJsonOutput::Sync(SyncHookJsonOutput {
-                        continue_: Some(true),
-                        ..Default::default()
-                    });
-                }
+            // Extract tool name early for span naming
+            let (tool_name, is_pre_tool) = match &input {
+                HookInput::PreToolUse(pre_tool) => (pre_tool.tool_name.clone(), true),
+                _ => ("".to_string(), false),
             };
 
-            tracing::debug!(
-                tool_name = %tool_name,
-                tool_use_id = ?tool_use_id,
-                "PreToolUse hook triggered"
-            );
+            // Create a span for this hook execution
+            let span = if is_pre_tool {
+                tracing::info_span!(
+                    "pre_tool_use_hook",
+                    tool_name = %tool_name,
+                    tool_use_id = ?tool_use_id,
+                    permission_decision = tracing::field::Empty,
+                    permission_rule = tracing::field::Empty,
+                    check_duration_us = tracing::field::Empty,
+                )
+            } else {
+                tracing::debug_span!(
+                    "pre_tool_use_hook_skip",
+                    event_type = ?std::mem::discriminant(&input)
+                )
+            };
 
-            // Check permission
-            let checker = permission_checker.read().await;
-            let permission_check = checker.check_permission(&tool_name, &tool_input);
-            let elapsed = start_time.elapsed();
+            Box::pin(
+                async move {
+                    let start_time = Instant::now();
 
-            tracing::info!(
-                tool_name = %tool_name,
-                tool_use_id = ?tool_use_id,
-                decision = ?permission_check.decision,
-                rule = ?permission_check.rule,
-                elapsed_us = elapsed.as_micros(),
-                "Permission check completed"
-            );
-
-            match permission_check.decision {
-                crate::settings::PermissionDecision::Allow => {
-                    let reason = format!(
-                        "Allowed by settings rule: {}",
-                        permission_check.rule.as_deref().unwrap_or("(implicit)")
-                    );
+                    // Only handle PreToolUse events
+                    let (tool_name, tool_input) = match &input {
+                        HookInput::PreToolUse(pre_tool) => {
+                            (pre_tool.tool_name.clone(), pre_tool.tool_input.clone())
+                        }
+                        _ => {
+                            tracing::debug!("Ignoring non-PreToolUse event");
+                            return HookJsonOutput::Sync(SyncHookJsonOutput {
+                                continue_: Some(true),
+                                ..Default::default()
+                            });
+                        }
+                    };
 
                     tracing::debug!(
                         tool_name = %tool_name,
-                        reason = %reason,
-                        "Tool execution allowed"
+                        tool_use_id = ?tool_use_id,
+                        "PreToolUse hook triggered"
                     );
 
-                    HookJsonOutput::Sync(SyncHookJsonOutput {
-                        continue_: Some(true),
-                        hook_specific_output: Some(HookSpecificOutput::PreToolUse(
-                            PreToolUseHookSpecificOutput {
-                                permission_decision: Some("allow".to_string()),
-                                permission_decision_reason: Some(reason),
-                                updated_input: None,
-                            },
-                        )),
-                        ..Default::default()
-                    })
-                }
+                    // Check permission
+                    let checker = permission_checker.read().await;
+                    let permission_check = checker.check_permission(&tool_name, &tool_input);
+                    let elapsed = start_time.elapsed();
 
-                crate::settings::PermissionDecision::Deny => {
-                    let reason = format!(
-                        "Denied by settings rule: {}",
-                        permission_check.rule.as_deref().unwrap_or("(implicit)")
+                    // Record permission decision to span (batched for performance)
+                    let span = tracing::Span::current();
+                    span.record(
+                        "permission_decision",
+                        format!("{:?}", permission_check.decision),
                     );
+                    span.record("check_duration_us", elapsed.as_micros());
+                    if let Some(ref rule) = permission_check.rule {
+                        span.record("permission_rule", rule.as_str());
+                    }
 
-                    tracing::warn!(
+                    tracing::info!(
                         tool_name = %tool_name,
-                        reason = %reason,
-                        "Tool execution denied"
+                        tool_use_id = ?tool_use_id,
+                        decision = ?permission_check.decision,
+                        rule = ?permission_check.rule,
+                        elapsed_us = elapsed.as_micros(),
+                        "Permission check completed"
                     );
 
-                    HookJsonOutput::Sync(SyncHookJsonOutput {
-                        continue_: Some(true),
-                        hook_specific_output: Some(HookSpecificOutput::PreToolUse(
-                            PreToolUseHookSpecificOutput {
-                                permission_decision: Some("deny".to_string()),
-                                permission_decision_reason: Some(reason),
-                                updated_input: None,
-                            },
-                        )),
-                        ..Default::default()
-                    })
-                }
+                    match permission_check.decision {
+                        crate::settings::PermissionDecision::Allow => {
+                            let reason = format!(
+                                "Allowed by settings rule: {}",
+                                permission_check.rule.as_deref().unwrap_or("(implicit)")
+                            );
 
-                crate::settings::PermissionDecision::Ask => {
-                    tracing::debug!(
-                        tool_name = %tool_name,
-                        "Tool requires permission prompt"
-                    );
-                    
-                    // Let the normal permission flow continue
-                    HookJsonOutput::Sync(SyncHookJsonOutput {
-                        continue_: Some(true),
-                        ..Default::default()
-                    })
+                            tracing::debug!(
+                                tool_name = %tool_name,
+                                reason = %reason,
+                                "Tool execution allowed"
+                            );
+
+                            HookJsonOutput::Sync(SyncHookJsonOutput {
+                                continue_: Some(true),
+                                hook_specific_output: Some(HookSpecificOutput::PreToolUse(
+                                    PreToolUseHookSpecificOutput {
+                                        permission_decision: Some("allow".to_string()),
+                                        permission_decision_reason: Some(reason),
+                                        updated_input: None,
+                                    },
+                                )),
+                                ..Default::default()
+                            })
+                        }
+
+                        crate::settings::PermissionDecision::Deny => {
+                            let reason = format!(
+                                "Denied by settings rule: {}",
+                                permission_check.rule.as_deref().unwrap_or("(implicit)")
+                            );
+
+                            tracing::warn!(
+                                tool_name = %tool_name,
+                                reason = %reason,
+                                rule = ?permission_check.rule,
+                                "Tool execution denied"
+                            );
+
+                            HookJsonOutput::Sync(SyncHookJsonOutput {
+                                continue_: Some(true),
+                                hook_specific_output: Some(HookSpecificOutput::PreToolUse(
+                                    PreToolUseHookSpecificOutput {
+                                        permission_decision: Some("deny".to_string()),
+                                        permission_decision_reason: Some(reason),
+                                        updated_input: None,
+                                    },
+                                )),
+                                ..Default::default()
+                            })
+                        }
+
+                        crate::settings::PermissionDecision::Ask => {
+                            tracing::debug!(
+                                tool_name = %tool_name,
+                                "Tool requires permission prompt"
+                            );
+
+                            // Let the normal permission flow continue
+                            HookJsonOutput::Sync(SyncHookJsonOutput {
+                                continue_: Some(true),
+                                ..Default::default()
+                            })
+                        }
+                    }
                 }
-            }
-        }) as BoxFuture<'static, HookJsonOutput>
-    })
+                .instrument(span),
+            ) as BoxFuture<'static, HookJsonOutput>
+        },
+    )
 }
 
 #[cfg(test)]
@@ -172,7 +214,8 @@ mod tests {
         match result {
             HookJsonOutput::Sync(output) => {
                 assert_eq!(output.continue_, Some(true));
-                if let Some(HookSpecificOutput::PreToolUse(specific)) = output.hook_specific_output {
+                if let Some(HookSpecificOutput::PreToolUse(specific)) = output.hook_specific_output
+                {
                     assert_eq!(specific.permission_decision, Some("allow".to_string()));
                 } else {
                     panic!("Expected PreToolUse specific output");
@@ -204,7 +247,8 @@ mod tests {
         match result {
             HookJsonOutput::Sync(output) => {
                 assert_eq!(output.continue_, Some(true));
-                if let Some(HookSpecificOutput::PreToolUse(specific)) = output.hook_specific_output {
+                if let Some(HookSpecificOutput::PreToolUse(specific)) = output.hook_specific_output
+                {
                     assert_eq!(specific.permission_decision, Some("deny".to_string()));
                 } else {
                     panic!("Expected PreToolUse specific output");

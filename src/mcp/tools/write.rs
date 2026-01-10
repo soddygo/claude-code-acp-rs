@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
+use std::time::Instant;
 
 use super::base::{Tool, ToolKind};
 use crate::mcp::registry::{ToolContext, ToolResult};
@@ -78,12 +79,20 @@ impl Tool for WriteTool {
             context.cwd.join(&params.file_path)
         };
 
+        let total_start = Instant::now();
+
         // Create parent directories if they don't exist
         if let Some(parent) = path.parent() {
             if !parent.exists() {
+                let dir_start = Instant::now();
                 if let Err(e) = tokio::fs::create_dir_all(parent).await {
                     return ToolResult::error(format!("Failed to create directory: {}", e));
                 }
+                tracing::debug!(
+                    parent_dir = %parent.display(),
+                    dir_creation_duration_ms = dir_start.elapsed().as_millis(),
+                    "Parent directories created"
+                );
             }
         }
 
@@ -91,11 +100,25 @@ impl Tool for WriteTool {
         let file_existed = path.exists();
 
         // Write content to file
+        let write_start = Instant::now();
         match tokio::fs::write(&path, &params.content).await {
             Ok(()) => {
+                let write_duration = write_start.elapsed();
+                let total_elapsed = total_start.elapsed();
+
                 let action = if file_existed { "Updated" } else { "Created" };
                 let lines = params.content.lines().count();
                 let bytes = params.content.len();
+
+                tracing::info!(
+                    file_path = %path.display(),
+                    action = %action,
+                    lines = lines,
+                    bytes = bytes,
+                    write_duration_ms = write_duration.as_millis(),
+                    total_elapsed_ms = total_elapsed.as_millis(),
+                    "File write successful"
+                );
 
                 ToolResult::success(format!(
                     "{} {} ({} lines, {} bytes)",
@@ -108,10 +131,21 @@ impl Tool for WriteTool {
                     "path": path.display().to_string(),
                     "created": !file_existed,
                     "lines": lines,
-                    "bytes": bytes
+                    "bytes": bytes,
+                    "write_duration_ms": write_duration.as_millis(),
+                    "total_elapsed_ms": total_elapsed.as_millis()
                 }))
             }
-            Err(e) => ToolResult::error(format!("Failed to write file: {}", e)),
+            Err(e) => {
+                let elapsed = total_start.elapsed();
+                tracing::error!(
+                    file_path = %path.display(),
+                    error = %e,
+                    elapsed_ms = elapsed.as_millis(),
+                    "File write failed"
+                );
+                ToolResult::error(format!("Failed to write file: {}", e))
+            }
         }
     }
 }
@@ -129,13 +163,15 @@ mod tests {
         let tool = WriteTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({
-                "file_path": file_path.to_str().unwrap(),
-                "content": "Hello, World!"
-            }),
-            &context,
-        ).await;
+        let result = tool
+            .execute(
+                json!({
+                    "file_path": file_path.to_str().unwrap(),
+                    "content": "Hello, World!"
+                }),
+                &context,
+            )
+            .await;
 
         assert!(!result.is_error);
         assert!(result.content.contains("Created"));
@@ -156,13 +192,15 @@ mod tests {
         let tool = WriteTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({
-                "file_path": file_path.to_str().unwrap(),
-                "content": "New content"
-            }),
-            &context,
-        ).await;
+        let result = tool
+            .execute(
+                json!({
+                    "file_path": file_path.to_str().unwrap(),
+                    "content": "New content"
+                }),
+                &context,
+            )
+            .await;
 
         assert!(!result.is_error);
         assert!(result.content.contains("Updated"));
@@ -180,13 +218,15 @@ mod tests {
         let tool = WriteTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({
-                "file_path": file_path.to_str().unwrap(),
-                "content": "Nested content"
-            }),
-            &context,
-        ).await;
+        let result = tool
+            .execute(
+                json!({
+                    "file_path": file_path.to_str().unwrap(),
+                    "content": "Nested content"
+                }),
+                &context,
+            )
+            .await;
 
         assert!(!result.is_error);
         assert!(file_path.exists());

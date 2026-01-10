@@ -27,6 +27,6 @@ pub mod tools;
 
 pub use acp_server::{AcpMcpServer, get_disallowed_tools};
 pub use external::{ExternalMcpError, ExternalMcpManager, ExternalMcpServer};
-pub use registry::{ToolContext, ToolRegistry, ToolResult, ToolStatus, ACP_TOOL_PREFIX};
+pub use registry::{ACP_TOOL_PREFIX, ToolContext, ToolRegistry, ToolResult, ToolStatus};
 pub use server::McpServer;
 pub use tools::Tool;

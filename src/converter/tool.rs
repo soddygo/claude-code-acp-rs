@@ -102,9 +102,7 @@ pub fn extract_tool_info(name: &str, input: &serde_json::Value) -> ToolInfo {
 
         "TodoWrite" => ToolInfo::new("Update task list", ToolKind::Think),
 
-        "EnterPlanMode" | "ExitPlanMode" => {
-            ToolInfo::new(name.to_string(), ToolKind::SwitchMode)
-        }
+        "EnterPlanMode" | "ExitPlanMode" => ToolInfo::new(name.to_string(), ToolKind::SwitchMode),
 
         "AskUserQuestion" => ToolInfo::new("Ask question", ToolKind::Other),
 

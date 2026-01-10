@@ -96,11 +96,27 @@ impl Tool for ReadTool {
             return ToolResult::error(format!("Not a file: {}", path.display()));
         }
 
-        // Read file content
+        // Read file content with timing
+        let read_start = std::time::Instant::now();
         let content = match tokio::fs::read_to_string(&path).await {
             Ok(c) => c,
-            Err(e) => return ToolResult::error(format!("Failed to read file: {}", e)),
+            Err(e) => {
+                let read_duration = read_start.elapsed();
+                return ToolResult::error(format!(
+                    "Failed to read file: {} (elapsed: {}ms)",
+                    e,
+                    read_duration.as_millis()
+                ));
+            }
         };
+        let read_duration = read_start.elapsed();
+
+        tracing::debug!(
+            file_path = %path.display(),
+            file_size_bytes = content.len(),
+            read_duration_ms = read_duration.as_millis(),
+            "File read completed"
+        );
 
         // Apply offset and limit
         let lines: Vec<&str> = content.lines().collect();
@@ -127,11 +143,21 @@ impl Tool for ReadTool {
         let result = selected_lines.join("\n");
         let returned_lines = selected_lines.len();
 
+        tracing::info!(
+            file_path = %path.display(),
+            total_lines = total_lines,
+            returned_lines = returned_lines,
+            offset = offset + 1,
+            "File read successfully"
+        );
+
         ToolResult::success(result).with_metadata(json!({
             "total_lines": total_lines,
             "returned_lines": returned_lines,
             "offset": offset + 1,
-            "path": path.display().to_string()
+            "path": path.display().to_string(),
+            "read_duration_ms": read_duration.as_millis(),
+            "file_size_bytes": content.len()
         }))
     }
 }
@@ -155,10 +181,9 @@ mod tests {
         let tool = ReadTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({"file_path": file_path.to_str().unwrap()}),
-            &context,
-        ).await;
+        let result = tool
+            .execute(json!({"file_path": file_path.to_str().unwrap()}), &context)
+            .await;
 
         assert!(!result.is_error);
         assert!(result.content.contains("Line 1"));
@@ -179,14 +204,16 @@ mod tests {
         let tool = ReadTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({
-                "file_path": file_path.to_str().unwrap(),
-                "offset": 3,
-                "limit": 2
-            }),
-            &context,
-        ).await;
+        let result = tool
+            .execute(
+                json!({
+                    "file_path": file_path.to_str().unwrap(),
+                    "offset": 3,
+                    "limit": 2
+                }),
+                &context,
+            )
+            .await;
 
         assert!(!result.is_error);
         assert!(result.content.contains("Line 3"));
@@ -200,10 +227,9 @@ mod tests {
         let tool = ReadTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({"file_path": "/nonexistent/file.txt"}),
-            &context,
-        ).await;
+        let result = tool
+            .execute(json!({"file_path": "/nonexistent/file.txt"}), &context)
+            .await;
 
         assert!(result.is_error);
         assert!(result.content.contains("not found"));

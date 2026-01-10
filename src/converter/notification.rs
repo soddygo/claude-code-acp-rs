@@ -3,6 +3,8 @@
 //! Converts SDK messages (assistant, system, result, stream events)
 //! into ACP session notifications for the client.
 
+use std::time::Instant;
+
 use claude_code_agent_sdk::{
     AssistantMessage, ContentBlock as SdkContentBlock, Message, ResultMessage, StreamEvent,
     ToolResultBlock, ToolResultContent, ToolUseBlock,
@@ -46,13 +48,21 @@ impl NotificationConverter {
     /// # Returns
     ///
     /// A vector of ACP SessionNotification objects
-    pub fn convert_message(
-        &self,
-        message: &Message,
-        session_id: &str,
-    ) -> Vec<SessionNotification> {
+    pub fn convert_message(&self, message: &Message, session_id: &str) -> Vec<SessionNotification> {
+        let start_time = Instant::now();
+
+        // Determine message type for logging
+        let message_type = match message {
+            Message::Assistant(_) => "Assistant",
+            Message::StreamEvent(_) => "StreamEvent",
+            Message::Result(_) => "Result",
+            Message::System(_) => "System",
+            Message::User(_) => "User",
+            Message::ControlCancelRequest(_) => "ControlCancelRequest",
+        };
+
         let sid = SessionId::new(session_id.to_string());
-        match message {
+        let notifications = match message {
             Message::Assistant(assistant) => self.convert_assistant_message(assistant, &sid),
             Message::StreamEvent(event) => self.convert_stream_event(event, &sid),
             Message::Result(result) => self.convert_result_message(result, &sid),
@@ -68,7 +78,20 @@ impl NotificationConverter {
                 // Internal control messages
                 vec![]
             }
-        }
+        };
+
+        let elapsed = start_time.elapsed();
+        let output_count = notifications.len();
+
+        tracing::trace!(
+            message_type = %message_type,
+            session_id = %session_id,
+            output_count = output_count,
+            conversion_duration_us = elapsed.as_micros(),
+            "Message conversion completed"
+        );
+
+        notifications
     }
 
     /// Convert an assistant message
@@ -214,11 +237,7 @@ impl NotificationConverter {
 
     /// Make an agent thought chunk notification (incremental)
     #[allow(clippy::unused_self)]
-    fn make_agent_thought_chunk(
-        &self,
-        session_id: &SessionId,
-        chunk: &str,
-    ) -> SessionNotification {
+    fn make_agent_thought_chunk(&self, session_id: &SessionId, chunk: &str) -> SessionNotification {
         SessionNotification::new(
             session_id.clone(),
             SessionUpdate::AgentThoughtChunk(ContentChunk::new(AcpContentBlock::Text(

@@ -38,12 +38,15 @@ pub mod mcp;
 pub mod session;
 pub mod settings;
 pub mod terminal;
+pub mod tracing;
 pub mod types;
 
 pub use agent::{run_acp, run_acp_with_cli, shutdown_otel};
 pub use cli::Cli;
-pub use hooks::{create_post_tool_use_hook, create_pre_tool_use_hook, HookCallbackRegistry};
-pub use mcp::{AcpMcpServer, McpServer, ToolContext, ToolRegistry, ToolResult, get_disallowed_tools};
+pub use hooks::{HookCallbackRegistry, create_post_tool_use_hook, create_pre_tool_use_hook};
+pub use mcp::{
+    AcpMcpServer, McpServer, ToolContext, ToolRegistry, ToolResult, get_disallowed_tools,
+};
 pub use settings::{Settings, SettingsManager};
 pub use terminal::{TerminalClient, TerminalHandle};
 pub use types::{AgentConfig, AgentError, NewSessionMeta, Result};

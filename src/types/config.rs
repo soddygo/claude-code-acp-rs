@@ -23,6 +23,11 @@ pub struct AgentConfig {
     /// Small/fast model name (fallback)
     /// Environment variable: `ANTHROPIC_SMALL_FAST_MODEL`
     pub small_fast_model: Option<String>,
+
+    /// Maximum tokens for thinking blocks (extended thinking mode)
+    /// Environment variable: `MAX_THINKING_TOKENS`
+    /// Typical values: 4096, 8000, 16000
+    pub max_thinking_tokens: Option<u32>,
 }
 
 impl AgentConfig {
@@ -39,17 +44,24 @@ impl AgentConfig {
     /// - `ANTHROPIC_AUTH_TOKEN`: Auth token (legacy, fallback if API_KEY not set)
     /// - `ANTHROPIC_MODEL`: Primary model name
     /// - `ANTHROPIC_SMALL_FAST_MODEL`: Small/fast model name
+    /// - `MAX_THINKING_TOKENS`: Maximum tokens for thinking blocks
     pub fn from_env() -> Self {
         // Prefer ANTHROPIC_API_KEY, fallback to ANTHROPIC_AUTH_TOKEN for compatibility
         let api_key = std::env::var("ANTHROPIC_API_KEY")
             .ok()
             .or_else(|| std::env::var("ANTHROPIC_AUTH_TOKEN").ok());
 
+        // Parse MAX_THINKING_TOKENS if present
+        let max_thinking_tokens = std::env::var("MAX_THINKING_TOKENS")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok());
+
         Self {
             base_url: std::env::var("ANTHROPIC_BASE_URL").ok(),
             api_key,
             model: std::env::var("ANTHROPIC_MODEL").ok(),
             small_fast_model: std::env::var("ANTHROPIC_SMALL_FAST_MODEL").ok(),
+            max_thinking_tokens,
         }
     }
 
@@ -59,6 +71,7 @@ impl AgentConfig {
             || self.api_key.is_some()
             || self.model.is_some()
             || self.small_fast_model.is_some()
+            || self.max_thinking_tokens.is_some()
     }
 
     /// Get environment variables to pass to Claude Code CLI
@@ -99,6 +112,11 @@ impl AgentConfig {
             options.fallback_model = Some(fallback.clone());
         }
 
+        // Set max_thinking_tokens if configured (enables extended thinking mode)
+        if let Some(tokens) = self.max_thinking_tokens {
+            options.max_thinking_tokens = Some(tokens);
+        }
+
         // Pass base_url and api_key as environment variables
         let env_vars = self.to_env_vars();
         if !env_vars.is_empty() {
@@ -118,6 +136,7 @@ mod tests {
         assert!(config.api_key.is_none());
         assert!(config.model.is_none());
         assert!(config.small_fast_model.is_none());
+        assert!(config.max_thinking_tokens.is_none());
         assert!(!config.is_configured());
     }
 
@@ -128,10 +147,14 @@ mod tests {
             api_key: Some("secret-key".to_string()),
             model: Some("claude-3".to_string()),
             small_fast_model: None,
+            max_thinking_tokens: None,
         };
 
         let env = config.to_env_vars();
-        assert_eq!(env.get("ANTHROPIC_BASE_URL").unwrap(), "https://api.example.com");
+        assert_eq!(
+            env.get("ANTHROPIC_BASE_URL").unwrap(),
+            "https://api.example.com"
+        );
         assert_eq!(env.get("ANTHROPIC_API_KEY").unwrap(), "secret-key");
         assert_eq!(env.get("ANTHROPIC_MODEL").unwrap(), "claude-3");
         assert!(!env.contains_key("ANTHROPIC_SMALL_FAST_MODEL"));
@@ -144,5 +167,19 @@ mod tests {
 
         config.model = Some("test".to_string());
         assert!(config.is_configured());
+    }
+
+    #[test]
+    fn test_max_thinking_tokens_config() {
+        let config = AgentConfig {
+            base_url: None,
+            api_key: None,
+            model: None,
+            small_fast_model: None,
+            max_thinking_tokens: Some(4096),
+        };
+
+        assert!(config.is_configured());
+        assert_eq!(config.max_thinking_tokens, Some(4096));
     }
 }

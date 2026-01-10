@@ -3,9 +3,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sacp::link::AgentToClient;
-use sacp::schema::{SessionId, SessionNotification, SessionUpdate, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, Terminal};
 use sacp::JrConnectionCx;
+use sacp::link::AgentToClient;
+use sacp::schema::{
+    SessionId, SessionNotification, SessionUpdate, Terminal, ToolCallContent, ToolCallId,
+    ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+};
 use serde::{Deserialize, Serialize};
 
 use super::tools::Tool;
@@ -182,9 +185,7 @@ impl ToolContext {
         let content = vec![ToolCallContent::Terminal(terminal)];
 
         // Build update fields
-        let mut update_fields = ToolCallUpdateFields::new()
-            .status(status)
-            .content(content);
+        let mut update_fields = ToolCallUpdateFields::new().status(status).content(content);
 
         if let Some(title) = title {
             update_fields = update_fields.title(title);
@@ -348,15 +349,13 @@ mod tests {
 
     #[test]
     fn test_tool_result_with_metadata() {
-        let result = ToolResult::success("data")
-            .with_metadata(json!({"lines": 10}));
+        let result = ToolResult::success("data").with_metadata(json!({"lines": 10}));
         assert!(result.metadata.is_some());
     }
 
     #[test]
     fn test_tool_context() {
-        let ctx = ToolContext::new("session-1", "/tmp")
-            .with_dangerous(true);
+        let ctx = ToolContext::new("session-1", "/tmp").with_dangerous(true);
         assert_eq!(ctx.session_id, "session-1");
         assert_eq!(ctx.cwd, std::path::PathBuf::from("/tmp"));
         assert!(ctx.allow_dangerous);
@@ -378,7 +377,10 @@ mod tests {
         // With prefix
         assert_eq!(ToolRegistry::normalize_name("mcp__acp__Read"), "Read");
         assert_eq!(ToolRegistry::normalize_name("mcp__acp__Bash"), "Bash");
-        assert_eq!(ToolRegistry::normalize_name("mcp__acp__TodoWrite"), "TodoWrite");
+        assert_eq!(
+            ToolRegistry::normalize_name("mcp__acp__TodoWrite"),
+            "TodoWrite"
+        );
     }
 
     #[test]

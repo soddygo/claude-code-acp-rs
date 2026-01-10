@@ -156,12 +156,18 @@ impl BackgroundProcessManager {
     }
 
     /// Get terminal by ID (returns reference for reading)
-    pub fn get(&self, shell_id: &str) -> Option<dashmap::mapref::one::Ref<'_, String, BackgroundTerminal>> {
+    pub fn get(
+        &self,
+        shell_id: &str,
+    ) -> Option<dashmap::mapref::one::Ref<'_, String, BackgroundTerminal>> {
         self.terminals.get(shell_id)
     }
 
     /// Get mutable terminal by ID
-    pub fn get_mut(&self, shell_id: &str) -> Option<dashmap::mapref::one::RefMut<'_, String, BackgroundTerminal>> {
+    pub fn get_mut(
+        &self,
+        shell_id: &str,
+    ) -> Option<dashmap::mapref::one::RefMut<'_, String, BackgroundTerminal>> {
         self.terminals.get_mut(shell_id)
     }
 

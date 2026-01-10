@@ -120,7 +120,9 @@ impl Settings {
         }
         // Merge permissions (combine rules from all sources)
         if let Some(other_perms) = other.permissions {
-            let perms = self.permissions.get_or_insert_with(PermissionSettings::default);
+            let perms = self
+                .permissions
+                .get_or_insert_with(PermissionSettings::default);
             // Merge allow rules
             if let Some(other_allow) = other_perms.allow {
                 let allow = perms.allow.get_or_insert_with(Vec::new);

@@ -296,9 +296,10 @@ fn is_file_tool(tool_name: &str) -> bool {
 fn extract_tool_argument(tool_name: &str, input: &serde_json::Value) -> Option<String> {
     match tool_name {
         // Bash tools use "command"
-        "Bash" | "BashOutput" | "KillShell" => {
-            input.get("command").and_then(|v| v.as_str()).map(String::from)
-        }
+        "Bash" | "BashOutput" | "KillShell" => input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         // File tools use "file_path" or "path"
         "Read" | "Write" | "Edit" | "NotebookRead" | "NotebookEdit" => input
             .get("file_path")
@@ -419,11 +420,7 @@ mod tests {
             &json!({"command": "npm run build && rm -rf /"}),
             &cwd
         ));
-        assert!(!rule.matches(
-            "Bash",
-            &json!({"command": "npm run build | cat"}),
-            &cwd
-        ));
+        assert!(!rule.matches("Bash", &json!({"command": "npm run build | cat"}), &cwd));
         assert!(!rule.matches(
             "Bash",
             &json!({"command": "npm run build; malicious"}),

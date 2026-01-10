@@ -102,6 +102,32 @@ Both versions can be installed and used on the same system:
 - `claude-code-acp` → npm version (TypeScript)
 - `claude-code-acp-rs` → Rust version (this project)
 
+## Extended Thinking Mode
+
+This agent supports Claude's Extended Thinking mode for complex reasoning tasks. See the [Thinking Mode Guide](docs/THINKING_MODE_CN.md) for details.
+
+**Quick Start:**
+
+```bash
+# Enable thinking mode with environment variable
+export MAX_THINKING_TOKENS=4096
+export ANTHROPIC_MODEL="claude-sonnet-4-20250514"
+
+# Run the agent
+claude-code-acp-rs
+```
+
+**Features:**
+- 🧠 Deep reasoning for complex programming tasks
+- 🔍 Better code analysis and generation quality
+- 📊 Configurable thinking token budget (4096, 8000, 16000)
+- 🎯 Support via environment variables or ACP `_meta` field
+
+For more details, see:
+- [English Documentation](docs/THINKING_MODE.md)
+- [中文文档](docs/THINKING_MODE_CN.md)
+- [Example Script](examples/thinking_mode.sh)
+
 ## License
 
 * [MIT LICENSE](LICENSE)

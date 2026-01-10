@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -156,6 +156,8 @@ impl Tool for BashTool {
 impl BashTool {
     /// Execute command in foreground (blocking)
     async fn execute_foreground(&self, params: &BashInput, context: &ToolContext) -> ToolResult {
+        let cmd_start = Instant::now();
+
         // Validate and set timeout
         let timeout_ms = params
             .timeout
@@ -163,27 +165,52 @@ impl BashTool {
             .min(MAX_TIMEOUT_MS);
         let timeout_duration = Duration::from_millis(timeout_ms);
 
-        // Build the command
+        // Stage 1: Build the command
+        let build_start = Instant::now();
         let mut cmd = Command::new("bash");
         cmd.arg("-c")
             .arg(&params.command)
             .current_dir(&context.cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        let build_duration = build_start.elapsed();
 
-        // Execute with timeout
+        tracing::debug!(
+            command = %params.command,
+            build_duration_ms = build_duration.as_millis(),
+            timeout_ms = timeout_ms,
+            "Bash command built"
+        );
+
+        // Stage 2: Execute with timeout
+        let exec_start = Instant::now();
         let output = match timeout(timeout_duration, cmd.output()).await {
             Ok(Ok(output)) => output,
-            Ok(Err(e)) => return ToolResult::error(format!("Failed to execute command: {}", e)),
+            Ok(Err(e)) => {
+                let exec_duration = exec_start.elapsed();
+                tracing::error!(
+                    command = %params.command,
+                    exec_duration_ms = exec_duration.as_millis(),
+                    error = %e,
+                    "Bash command execution failed"
+                );
+                return ToolResult::error(format!("Failed to execute command: {}", e));
+            }
             Err(_) => {
-                return ToolResult::error(format!(
-                    "Command timed out after {}ms",
-                    timeout_ms
-                ))
+                let exec_duration = exec_start.elapsed();
+                tracing::warn!(
+                    command = %params.command,
+                    exec_duration_ms = exec_duration.as_millis(),
+                    timeout_ms = timeout_ms,
+                    "Bash command timed out"
+                );
+                return ToolResult::error(format!("Command timed out after {}ms", timeout_ms));
             }
         };
+        let exec_duration = exec_start.elapsed();
 
-        // Collect output
+        // Stage 3: Process output
+        let process_start = Instant::now();
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -214,21 +241,45 @@ impl BashTool {
             result_text = "(no output)".to_string();
         }
 
+        let process_duration = process_start.elapsed();
+        let total_elapsed = cmd_start.elapsed();
+
         let exit_code = output.status.code().unwrap_or(-1);
         let success = output.status.success();
+
+        // Log execution summary
+        tracing::info!(
+            command = %params.command,
+            exit_code = exit_code,
+            success = success,
+            build_duration_ms = build_duration.as_millis(),
+            exec_duration_ms = exec_duration.as_millis(),
+            process_duration_ms = process_duration.as_millis(),
+            total_elapsed_ms = total_elapsed.as_millis(),
+            output_size_bytes = result_text.len(),
+            was_truncated = was_truncated,
+            "Bash command execution summary"
+        );
 
         if success {
             ToolResult::success(result_text).with_metadata(json!({
                 "exit_code": exit_code,
                 "truncated": was_truncated,
-                "description": params.description
+                "description": params.description,
+                "total_elapsed_ms": total_elapsed.as_millis(),
+                "exec_duration_ms": exec_duration.as_millis()
             }))
         } else {
-            ToolResult::error(format!("Command failed with exit code {}\n{}", exit_code, result_text))
-                .with_metadata(json!({
-                    "exit_code": exit_code,
-                    "truncated": was_truncated
-                }))
+            ToolResult::error(format!(
+                "Command failed with exit code {}\n{}",
+                exit_code, result_text
+            ))
+            .with_metadata(json!({
+                "exit_code": exit_code,
+                "truncated": was_truncated,
+                "total_elapsed_ms": total_elapsed.as_millis(),
+                "exec_duration_ms": exec_duration.as_millis()
+            }))
         }
     }
 
@@ -406,10 +457,7 @@ impl BashTool {
                 let exit_status = exit_response.exit_status;
                 // exit_code is Option<u32>, convert to i32 for compatibility
                 #[allow(clippy::cast_possible_wrap)]
-                let exit_code = exit_status
-                    .exit_code
-                    .map(|c| c as i32)
-                    .unwrap_or(-1);
+                let exit_code = exit_status.exit_code.map(|c| c as i32).unwrap_or(-1);
                 let was_truncated = output.len() >= MAX_OUTPUT_SIZE;
 
                 let result_text = if output.is_empty() {
@@ -510,12 +558,14 @@ mod tests {
         let tool = BashTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({
-                "command": "echo 'Hello, World!'"
-            }),
-            &context,
-        ).await;
+        let result = tool
+            .execute(
+                json!({
+                    "command": "echo 'Hello, World!'"
+                }),
+                &context,
+            )
+            .await;
 
         assert!(!result.is_error);
         assert!(result.content.contains("Hello, World!"));
@@ -527,12 +577,14 @@ mod tests {
         let tool = BashTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({
-                "command": "pwd"
-            }),
-            &context,
-        ).await;
+        let result = tool
+            .execute(
+                json!({
+                    "command": "pwd"
+                }),
+                &context,
+            )
+            .await;
 
         assert!(!result.is_error);
         assert!(result.content.contains(temp_dir.path().to_str().unwrap()));
@@ -544,12 +596,14 @@ mod tests {
         let tool = BashTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({
-                "command": "exit 1"
-            }),
-            &context,
-        ).await;
+        let result = tool
+            .execute(
+                json!({
+                    "command": "exit 1"
+                }),
+                &context,
+            )
+            .await;
 
         assert!(result.is_error);
         assert!(result.content.contains("exit code 1"));
@@ -561,12 +615,14 @@ mod tests {
         let tool = BashTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({
-                "command": "echo 'error message' >&2"
-            }),
-            &context,
-        ).await;
+        let result = tool
+            .execute(
+                json!({
+                    "command": "echo 'error message' >&2"
+                }),
+                &context,
+            )
+            .await;
 
         assert!(!result.is_error);
         assert!(result.content.contains("error message"));
@@ -578,13 +634,15 @@ mod tests {
         let tool = BashTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({
-                "command": "sleep 10",
-                "timeout": 100
-            }),
-            &context,
-        ).await;
+        let result = tool
+            .execute(
+                json!({
+                    "command": "sleep 10",
+                    "timeout": 100
+                }),
+                &context,
+            )
+            .await;
 
         assert!(result.is_error);
         assert!(result.content.contains("timed out"));

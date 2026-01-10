@@ -3,12 +3,12 @@
 //! Implements the ACP permission request/response protocol for asking users
 //! whether to allow tool execution.
 
+use sacp::JrConnectionCx;
 use sacp::link::AgentToClient;
 use sacp::schema::{
     PermissionOption, PermissionOptionId, PermissionOptionKind, RequestPermissionOutcome,
     RequestPermissionRequest, SessionId, ToolCallUpdate, ToolCallUpdateFields,
 };
-use sacp::JrConnectionCx;
 
 use crate::types::AgentError;
 
@@ -160,26 +160,17 @@ fn format_tool_title(tool_name: &str, input: &serde_json::Value) -> String {
             format!("Edit {}", path)
         }
         "Bash" => {
-            let cmd = input
-                .get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let cmd = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
             let desc = input.get("description").and_then(|v| v.as_str());
             desc.map(String::from)
                 .unwrap_or_else(|| format!("Run: {}", truncate_string(cmd, 50)))
         }
         "Grep" => {
-            let pattern = input
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let pattern = input.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
             format!("Search: {}", pattern)
         }
         "Glob" => {
-            let pattern = input
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let pattern = input.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
             format!("Find files: {}", pattern)
         }
         _ => tool_name.to_string(),
@@ -237,25 +228,25 @@ mod tests {
     #[test]
     fn test_permission_outcome_selected() {
         // Test Selected outcomes
-        let selected_always = RequestPermissionOutcome::Selected(
-            SelectedPermissionOutcome::new(PermissionOptionId::new("allow_always")),
-        );
+        let selected_always = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+            PermissionOptionId::new("allow_always"),
+        ));
         assert_eq!(
             parse_permission_response(selected_always),
             PermissionOutcome::AllowAlways
         );
 
-        let selected_once = RequestPermissionOutcome::Selected(
-            SelectedPermissionOutcome::new(PermissionOptionId::new("allow_once")),
-        );
+        let selected_once = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+            PermissionOptionId::new("allow_once"),
+        ));
         assert_eq!(
             parse_permission_response(selected_once),
             PermissionOutcome::AllowOnce
         );
 
-        let selected_reject = RequestPermissionOutcome::Selected(
-            SelectedPermissionOutcome::new(PermissionOptionId::new("reject_once")),
-        );
+        let selected_reject = RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+            PermissionOptionId::new("reject_once"),
+        ));
         assert_eq!(
             parse_permission_response(selected_reject),
             PermissionOutcome::Rejected

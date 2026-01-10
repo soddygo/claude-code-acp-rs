@@ -164,7 +164,10 @@ fn generate_diff_preview(old: &str, new: &str) -> String {
     for (i, line) in old_lines.iter().take(max_lines).enumerate() {
         preview.push_str(&format!("- {}\n", line));
         if i == max_lines - 1 && old_lines.len() > max_lines {
-            preview.push_str(&format!("  ... ({} more lines)\n", old_lines.len() - max_lines));
+            preview.push_str(&format!(
+                "  ... ({} more lines)\n",
+                old_lines.len() - max_lines
+            ));
         }
     }
 
@@ -172,7 +175,10 @@ fn generate_diff_preview(old: &str, new: &str) -> String {
     for (i, line) in new_lines.iter().take(max_lines).enumerate() {
         preview.push_str(&format!("+ {}\n", line));
         if i == max_lines - 1 && new_lines.len() > max_lines {
-            preview.push_str(&format!("  ... ({} more lines)\n", new_lines.len() - max_lines));
+            preview.push_str(&format!(
+                "  ... ({} more lines)\n",
+                new_lines.len() - max_lines
+            ));
         }
     }
 
@@ -197,14 +203,16 @@ mod tests {
         let tool = EditTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({
-                "file_path": file_path.to_str().unwrap(),
-                "old_string": "Hello",
-                "new_string": "Hi"
-            }),
-            &context,
-        ).await;
+        let result = tool
+            .execute(
+                json!({
+                    "file_path": file_path.to_str().unwrap(),
+                    "old_string": "Hello",
+                    "new_string": "Hi"
+                }),
+                &context,
+            )
+            .await;
 
         assert!(!result.is_error);
 
@@ -224,15 +232,17 @@ mod tests {
         let tool = EditTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({
-                "file_path": file_path.to_str().unwrap(),
-                "old_string": "foo",
-                "new_string": "qux",
-                "replace_all": true
-            }),
-            &context,
-        ).await;
+        let result = tool
+            .execute(
+                json!({
+                    "file_path": file_path.to_str().unwrap(),
+                    "old_string": "foo",
+                    "new_string": "qux",
+                    "replace_all": true
+                }),
+                &context,
+            )
+            .await;
 
         assert!(!result.is_error);
 
@@ -252,14 +262,16 @@ mod tests {
         let tool = EditTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({
-                "file_path": file_path.to_str().unwrap(),
-                "old_string": "foo",
-                "new_string": "baz"
-            }),
-            &context,
-        ).await;
+        let result = tool
+            .execute(
+                json!({
+                    "file_path": file_path.to_str().unwrap(),
+                    "old_string": "foo",
+                    "new_string": "baz"
+                }),
+                &context,
+            )
+            .await;
 
         assert!(result.is_error);
         assert!(result.content.contains("2 occurrences"));
@@ -275,14 +287,16 @@ mod tests {
         let tool = EditTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool.execute(
-            json!({
-                "file_path": file_path.to_str().unwrap(),
-                "old_string": "Goodbye",
-                "new_string": "Hi"
-            }),
-            &context,
-        ).await;
+        let result = tool
+            .execute(
+                json!({
+                    "file_path": file_path.to_str().unwrap(),
+                    "old_string": "Goodbye",
+                    "new_string": "Hi"
+                }),
+                &context,
+            )
+            .await;
 
         assert!(result.is_error);
         assert!(result.content.contains("not found"));

@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use globset::{Glob, GlobSetBuilder};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -198,10 +198,12 @@ mod tests {
 
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["pattern"].is_object());
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("pattern")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("pattern"))
+        );
     }
 
     #[tokio::test]
@@ -229,9 +231,7 @@ mod tests {
         let context = ToolContext::new("test", temp_dir.path());
 
         // Find all .rs files
-        let result = tool
-            .execute(json!({"pattern": "**/*.rs"}), &context)
-            .await;
+        let result = tool.execute(json!({"pattern": "**/*.rs"}), &context).await;
 
         assert!(!result.is_error);
         assert!(result.content.contains("main.rs"));
@@ -246,9 +246,7 @@ mod tests {
         let tool = GlobTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool
-            .execute(json!({"pattern": "**/*.xyz"}), &context)
-            .await;
+        let result = tool.execute(json!({"pattern": "**/*.xyz"}), &context).await;
 
         assert!(!result.is_error);
         assert!(result.content.contains("No files matching"));
@@ -261,9 +259,7 @@ mod tests {
         let tool = GlobTool::new();
         let context = ToolContext::new("test", temp_dir.path());
 
-        let result = tool
-            .execute(json!({"pattern": "[invalid"}), &context)
-            .await;
+        let result = tool.execute(json!({"pattern": "[invalid"}), &context).await;
 
         assert!(result.is_error);
         assert!(result.content.contains("Invalid glob pattern"));

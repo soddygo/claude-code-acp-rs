@@ -82,6 +82,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             model: Some("claude-3-opus".to_string()),
             small_fast_model: None,
+            max_thinking_tokens: Some(4096),
         };
 
         let agent = ClaudeAcpAgent::with_config(config);
@@ -89,5 +90,6 @@ mod tests {
             agent.config().base_url,
             Some("https://api.example.com".to_string())
         );
+        assert_eq!(agent.config().max_thinking_tokens, Some(4096));
     }
 }

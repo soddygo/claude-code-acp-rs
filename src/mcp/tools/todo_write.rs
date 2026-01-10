@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -274,10 +274,12 @@ mod tests {
 
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["todos"].is_object());
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("todos")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("todos"))
+        );
     }
 
     #[tokio::test]

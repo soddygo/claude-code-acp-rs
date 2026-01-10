@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use notify::{RecommendedWatcher, RecursiveMode};
-use notify_debouncer_mini::{new_debouncer, DebounceEventResult, DebouncedEventKind, Debouncer};
+use notify_debouncer_mini::{DebounceEventResult, DebouncedEventKind, Debouncer, new_debouncer};
 use tokio::sync::mpsc;
 
 /// Settings file watcher
@@ -191,7 +191,9 @@ mod tests {
     #[test]
     fn test_is_settings_file() {
         assert!(is_settings_file(Path::new("/some/path/settings.json")));
-        assert!(is_settings_file(Path::new("/some/path/settings.local.json")));
+        assert!(is_settings_file(Path::new(
+            "/some/path/settings.local.json"
+        )));
         assert!(!is_settings_file(Path::new("/some/path/other.json")));
         assert!(!is_settings_file(Path::new("/some/path/settings.yaml")));
     }

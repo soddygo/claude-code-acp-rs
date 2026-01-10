@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures::StreamExt;
+use sacp::JrConnectionCx;
 use sacp::link::AgentToClient;
 use sacp::schema::{
     AgentCapabilities, ContentBlock, CurrentModeUpdate, Implementation, InitializeRequest,
@@ -18,7 +19,6 @@ use sacp::schema::{
     SessionModeId, SessionModeState, SessionNotification, SessionUpdate, SetSessionModeRequest,
     SetSessionModeResponse, StopReason, TextContent,
 };
-use sacp::JrConnectionCx;
 use tracing::instrument;
 
 use crate::session::{PermissionMode, SessionManager};
@@ -36,10 +36,7 @@ use crate::types::{AgentConfig, AgentError, NewSessionMeta};
         agent_version = %env!("CARGO_PKG_VERSION"),
     )
 )]
-pub fn handle_initialize(
-    request: InitializeRequest,
-    _config: &AgentConfig,
-) -> InitializeResponse {
+pub fn handle_initialize(request: InitializeRequest, _config: &AgentConfig) -> InitializeResponse {
     tracing::info!(
         protocol_version = ?request.protocol_version,
         agent_name = "claude-code-acp-rs",
@@ -48,16 +45,13 @@ pub fn handle_initialize(
     );
 
     // Build agent capabilities using builder pattern
-    let prompt_caps = PromptCapabilities::new()
-        .image(true)
-        .embedded_context(true);
+    let prompt_caps = PromptCapabilities::new().image(true).embedded_context(true);
 
-    let capabilities = AgentCapabilities::new()
-        .prompt_capabilities(prompt_caps);
+    let capabilities = AgentCapabilities::new().prompt_capabilities(prompt_caps);
 
     // Build agent info
-    let agent_info = Implementation::new("claude-code-acp-rs", env!("CARGO_PKG_VERSION"))
-        .title("Claude Code");
+    let agent_info =
+        Implementation::new("claude-code-acp-rs", env!("CARGO_PKG_VERSION")).title("Claude Code");
 
     tracing::debug!(
         capabilities = ?capabilities,
@@ -89,14 +83,14 @@ pub async fn handle_new_session(
     sessions: &Arc<SessionManager>,
 ) -> Result<NewSessionResponse, AgentError> {
     let start_time = Instant::now();
-    
+
     tracing::info!(
         cwd = ?request.cwd,
         has_meta = request.meta.is_some(),
         mcp_server_count = request.mcp_servers.len(),
         "Creating new ACP session"
     );
-    
+
     // Log external MCP servers from client
     if !request.mcp_servers.is_empty() {
         tracing::info!(
@@ -129,8 +123,9 @@ pub async fn handle_new_session(
     );
 
     // Create the session
-    let session = sessions.create_session(session_id.clone(), cwd.clone(), config, meta.as_ref())?;
-    
+    let session =
+        sessions.create_session(session_id.clone(), cwd.clone(), config, meta.as_ref())?;
+
     // Store external MCP servers for later connection
     if !request.mcp_servers.is_empty() {
         session.set_external_mcp_servers(request.mcp_servers).await;
@@ -148,8 +143,7 @@ pub async fn handle_new_session(
         "New session created successfully"
     );
 
-    Ok(NewSessionResponse::new(session_id)
-        .modes(mode_state))
+    Ok(NewSessionResponse::new(session_id).modes(mode_state))
 }
 
 /// Handle session/load request
@@ -174,7 +168,7 @@ pub fn handle_load_session(
     sessions: &Arc<SessionManager>,
 ) -> Result<LoadSessionResponse, AgentError> {
     let start_time = Instant::now();
-    
+
     // The session_id in the request is the ID of the session to resume
     let resume_session_id = request.session_id.0.to_string();
     let cwd = request.cwd;
@@ -210,7 +204,7 @@ pub fn handle_load_session(
             "Creating session with resume option"
         );
         sessions.create_session(session_id.clone(), cwd.clone(), config, Some(&meta))?;
-        
+
         let elapsed = start_time.elapsed();
         tracing::info!(
             session_id = %session_id,
@@ -262,7 +256,7 @@ pub async fn handle_prompt(
     connection_cx: JrConnectionCx<AgentToClient>,
 ) -> Result<PromptResponse, AgentError> {
     let prompt_start = Instant::now();
-    
+
     let session_id = request.session_id.0.as_ref();
     let session = sessions.get_session_or_error(session_id)?;
 
@@ -339,10 +333,7 @@ pub async fn handle_prompt(
 
         // Send the query
         if !query_text.is_empty() {
-            client
-                .query(&query_text)
-                .await
-                .map_err(AgentError::from)?;
+            client.query(&query_text).await.map_err(AgentError::from)?;
         }
     }
     let query_elapsed = query_start.elapsed();
@@ -381,7 +372,7 @@ pub async fn handle_prompt(
         match result {
             Ok(message) => {
                 message_count += 1;
-                
+
                 // Convert SDK message to ACP notifications
                 let notifications = converter.convert_message(&message, session_id);
                 let batch_size = notifications.len();
@@ -398,7 +389,7 @@ pub async fn handle_prompt(
                         );
                     }
                 }
-                
+
                 tracing::trace!(
                     session_id = %session_id,
                     message_count = message_count,
@@ -421,7 +412,7 @@ pub async fn handle_prompt(
 
     let stream_elapsed = stream_start.elapsed();
     let total_elapsed = prompt_start.elapsed();
-    
+
     tracing::info!(
         session_id = %session_id,
         total_elapsed_ms = total_elapsed.as_millis(),
@@ -463,7 +454,7 @@ pub async fn handle_set_mode(
 ) -> Result<SetSessionModeResponse, AgentError> {
     let session_id_str = request.session_id.0.as_ref();
     let mode_id_str = request.mode_id.0.as_ref();
-    
+
     tracing::info!(
         session_id = %session_id_str,
         mode_id = %mode_id_str,
@@ -476,15 +467,14 @@ pub async fn handle_set_mode(
     let previous_mode = session.permission_mode().await;
 
     // Parse the mode from mode_id
-    let mode = PermissionMode::parse(mode_id_str)
-        .ok_or_else(|| {
-            tracing::warn!(
-                session_id = %session_id_str,
-                mode_id = %mode_id_str,
-                "Invalid mode ID"
-            );
-            AgentError::InvalidMode(mode_id_str.to_string())
-        })?;
+    let mode = PermissionMode::parse(mode_id_str).ok_or_else(|| {
+        tracing::warn!(
+            session_id = %session_id_str,
+            mode_id = %mode_id_str,
+            "Invalid mode ID"
+        );
+        AgentError::InvalidMode(mode_id_str.to_string())
+    })?;
 
     // Set the mode
     session.set_permission_mode(mode).await;
@@ -523,20 +513,23 @@ pub async fn handle_set_mode(
     skip(sessions),
     fields(session_id = %session_id)
 )]
-pub async fn handle_cancel(session_id: &str, sessions: &Arc<SessionManager>) -> Result<(), AgentError> {
+pub async fn handle_cancel(
+    session_id: &str,
+    sessions: &Arc<SessionManager>,
+) -> Result<(), AgentError> {
     tracing::info!(
         session_id = %session_id,
         "Cancelling session"
     );
-    
+
     let session = sessions.get_session_or_error(session_id)?;
     session.cancel().await;
-    
+
     tracing::info!(
         session_id = %session_id,
         "Session cancellation completed"
     );
-    
+
     Ok(())
 }
 
@@ -577,7 +570,9 @@ mod tests {
         let config = AgentConfig::from_env();
         let sessions = Arc::new(SessionManager::new());
 
-        let response = handle_new_session(request, &config, &sessions).await.unwrap();
+        let response = handle_new_session(request, &config, &sessions)
+            .await
+            .unwrap();
 
         assert!(!response.session_id.0.is_empty());
         assert!(sessions.has_session(&response.session_id.0));

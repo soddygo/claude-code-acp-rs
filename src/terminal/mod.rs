@@ -19,7 +19,7 @@ pub use handle::TerminalHandle;
 // Re-export relevant types from sacp::schema for convenience
 pub use sacp::schema::{
     CreateTerminalRequest, CreateTerminalResponse, KillTerminalCommandRequest,
-    KillTerminalCommandResponse, ReleaseTerminalRequest, ReleaseTerminalResponse, TerminalExitStatus,
-    TerminalId, TerminalOutputRequest, TerminalOutputResponse, WaitForTerminalExitRequest,
-    WaitForTerminalExitResponse,
+    KillTerminalCommandResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
+    TerminalExitStatus, TerminalId, TerminalOutputRequest, TerminalOutputResponse,
+    WaitForTerminalExitRequest, WaitForTerminalExitResponse,
 };

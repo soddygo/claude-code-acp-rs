@@ -53,7 +53,8 @@ impl SystemPromptMeta {
 ///   "_meta": {
 ///     "claudeCode": {
 ///       "options": {
-///         "resume": "session-uuid-12345"
+///         "resume": "session-uuid-12345",
+///         "maxThinkingTokens": 4096
 ///       }
 ///     }
 ///   }
@@ -64,6 +65,11 @@ pub struct ClaudeCodeOptions {
     /// Session ID to resume
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,
+
+    /// Maximum tokens for thinking blocks (extended thinking mode)
+    /// Typical values: 4096, 8000, 16000
+    #[serde(skip_serializing_if = "Option::is_none", rename = "maxThinkingTokens")]
+    pub max_thinking_tokens: Option<u32>,
 }
 
 /// Claude Code meta configuration
@@ -84,6 +90,11 @@ impl ClaudeCodeMeta {
     /// Get the session ID to resume, if any
     pub fn get_resume_session_id(&self) -> Option<&str> {
         self.options.as_ref()?.resume.as_deref()
+    }
+
+    /// Get the max thinking tokens setting, if any
+    pub fn get_max_thinking_tokens(&self) -> Option<u32> {
+        self.options.as_ref()?.max_thinking_tokens
     }
 }
 
@@ -113,6 +124,7 @@ impl NewSessionMeta {
             claude_code: Some(ClaudeCodeMeta {
                 options: Some(ClaudeCodeOptions {
                     resume: Some(session_id.to_string()),
+                    max_thinking_tokens: None,
                 }),
             }),
             disable_built_in_tools: false,
@@ -158,6 +170,11 @@ impl NewSessionMeta {
         self.claude_code.as_ref()?.get_resume_session_id()
     }
 
+    /// Get the max thinking tokens setting, if any
+    pub fn get_max_thinking_tokens(&self) -> Option<u32> {
+        self.claude_code.as_ref()?.get_max_thinking_tokens()
+    }
+
     /// Check if this session should resume from a previous session
     pub fn should_resume(&self) -> bool {
         self.get_resume_session_id().is_some()
@@ -198,6 +215,22 @@ mod tests {
     }
 
     #[test]
+    fn test_claude_code_meta_with_thinking_tokens() {
+        let meta = json!({
+            "claudeCode": {
+                "options": {
+                    "resume": "session-uuid-12345",
+                    "maxThinkingTokens": 4096
+                }
+            }
+        });
+
+        let parsed = ClaudeCodeMeta::from_meta(&meta).unwrap();
+        assert_eq!(parsed.get_resume_session_id(), Some("session-uuid-12345"));
+        assert_eq!(parsed.get_max_thinking_tokens(), Some(4096));
+    }
+
+    #[test]
     fn test_new_session_meta_full() {
         let meta = json!({
             "systemPrompt": {
@@ -205,7 +238,8 @@ mod tests {
             },
             "claudeCode": {
                 "options": {
-                    "resume": "abc-123"
+                    "resume": "abc-123",
+                    "maxThinkingTokens": 8000
                 }
             },
             "disableBuiltInTools": true
@@ -214,6 +248,7 @@ mod tests {
         let parsed = NewSessionMeta::from_request_meta(Some(&meta));
         assert_eq!(parsed.get_system_prompt_append(), Some("Be concise"));
         assert_eq!(parsed.get_resume_session_id(), Some("abc-123"));
+        assert_eq!(parsed.get_max_thinking_tokens(), Some(8000));
         assert!(parsed.disable_built_in_tools);
         assert!(parsed.should_resume());
     }

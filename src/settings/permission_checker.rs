@@ -29,24 +29,15 @@ impl PermissionChecker {
 
         // Pre-parse rules for efficiency
         let allow_rules = Self::parse_rules(
-            settings
-                .permissions
-                .as_ref()
-                .and_then(|p| p.allow.as_ref()),
+            settings.permissions.as_ref().and_then(|p| p.allow.as_ref()),
             &cwd,
         );
         let deny_rules = Self::parse_rules(
-            settings
-                .permissions
-                .as_ref()
-                .and_then(|p| p.deny.as_ref()),
+            settings.permissions.as_ref().and_then(|p| p.deny.as_ref()),
             &cwd,
         );
         let ask_rules = Self::parse_rules(
-            settings
-                .permissions
-                .as_ref()
-                .and_then(|p| p.ask.as_ref()),
+            settings.permissions.as_ref().and_then(|p| p.ask.as_ref()),
             &cwd,
         );
 
@@ -84,11 +75,7 @@ impl PermissionChecker {
         // Check deny rules first (highest priority)
         for (rule_str, parsed) in &self.deny_rules {
             if parsed.matches(tool_name, tool_input, &self.cwd) {
-                tracing::debug!(
-                    "Tool {} denied by rule: {}",
-                    tool_name,
-                    rule_str
-                );
+                tracing::debug!("Tool {} denied by rule: {}", tool_name, rule_str);
                 return PermissionCheckResult::deny(rule_str);
             }
         }
@@ -96,11 +83,7 @@ impl PermissionChecker {
         // Check allow rules
         for (rule_str, parsed) in &self.allow_rules {
             if parsed.matches(tool_name, tool_input, &self.cwd) {
-                tracing::debug!(
-                    "Tool {} allowed by rule: {}",
-                    tool_name,
-                    rule_str
-                );
+                tracing::debug!("Tool {} allowed by rule: {}", tool_name, rule_str);
                 return PermissionCheckResult::allow(rule_str);
             }
         }
@@ -118,10 +101,7 @@ impl PermissionChecker {
         }
 
         // Default: ask
-        tracing::debug!(
-            "Tool {} has no matching rule, defaulting to ask",
-            tool_name
-        );
+        tracing::debug!("Tool {} has no matching rule, defaulting to ask", tool_name);
         PermissionCheckResult::ask()
     }
 

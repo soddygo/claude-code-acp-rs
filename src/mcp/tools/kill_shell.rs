@@ -9,7 +9,7 @@
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::base::Tool;
 use crate::mcp::registry::{ToolContext, ToolResult};
@@ -99,7 +99,8 @@ impl KillShellTool {
                     } else {
                         output
                     }
-                )).with_metadata(json!({
+                ))
+                .with_metadata(json!({
                     "terminal_id": terminal_id,
                     "terminal_api": true
                 }))
@@ -122,7 +123,11 @@ impl KillShellTool {
 
         // Check the terminal state and kill if running
         match &*terminal {
-            BackgroundTerminal::Running { child, output_buffer, .. } => {
+            BackgroundTerminal::Running {
+                child,
+                output_buffer,
+                ..
+            } => {
                 // Try to kill the process
                 let mut child_guard = child.lock().await;
                 match child_guard.kill().await {
@@ -133,7 +138,9 @@ impl KillShellTool {
                         drop(terminal);
 
                         // Update terminal to finished state
-                        manager.finish_terminal(shell_id, TerminalExitStatus::Killed).await;
+                        manager
+                            .finish_terminal(shell_id, TerminalExitStatus::Killed)
+                            .await;
 
                         ToolResult::success(format!(
                             "Command killed successfully.\n\nFinal output:\n{}",
@@ -144,12 +151,13 @@ impl KillShellTool {
                             }
                         ))
                     }
-                    Err(e) => {
-                        ToolResult::error(format!("Failed to kill process: {}", e))
-                    }
+                    Err(e) => ToolResult::error(format!("Failed to kill process: {}", e)),
                 }
             }
-            BackgroundTerminal::Finished { status, final_output } => {
+            BackgroundTerminal::Finished {
+                status,
+                final_output,
+            } => {
                 let message = match status {
                     TerminalExitStatus::Exited(code) => {
                         format!("Command had already exited with code {}.", code)
@@ -191,6 +199,11 @@ mod tests {
 
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["shell_id"].is_object());
-        assert!(schema["required"].as_array().unwrap().contains(&json!("shell_id")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("shell_id"))
+        );
     }
 }

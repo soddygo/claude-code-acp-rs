@@ -10,8 +10,8 @@ use crate::mcp::external::{ExternalMcpError, ExternalMcpManager};
 use crate::mcp::registry::{ToolContext, ToolRegistry, ToolResult, ToolSchema};
 use crate::mcp::tools::{
     BashOutputTool, BashTool, EditTool, ExitPlanModeTool, GlobTool, GrepTool, KillShellTool,
-    LsTool, NotebookEditTool, NotebookReadTool, ReadTool, TaskOutputTool, TaskTool, Tool,
-    TodoWriteTool, WebFetchTool, WebSearchTool, WriteTool,
+    LsTool, NotebookEditTool, NotebookReadTool, ReadTool, TaskOutputTool, TaskTool, TodoWriteTool,
+    Tool, WebFetchTool, WebSearchTool, WriteTool,
 };
 use crate::settings::McpServerConfig;
 
@@ -396,9 +396,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let context = ToolContext::new("test-session", temp_dir.path());
 
-        let result = server
-            .execute("UnknownTool", json!({}), &context)
-            .await;
+        let result = server.execute("UnknownTool", json!({}), &context).await;
 
         assert!(result.is_error);
         assert!(result.content.contains("not found"));

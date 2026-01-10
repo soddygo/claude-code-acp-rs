@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::base::Tool;
 use crate::mcp::registry::{ToolContext, ToolResult};
@@ -146,10 +146,12 @@ mod tests {
         assert!(schema["properties"]["query"].is_object());
         assert!(schema["properties"]["allowed_domains"].is_object());
         assert!(schema["properties"]["blocked_domains"].is_object());
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("query")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("query"))
+        );
     }
 
     #[tokio::test]

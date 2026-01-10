@@ -11,14 +11,14 @@ use async_trait::async_trait;
 use claude_code_agent_sdk::{
     SdkMcpServer, SdkMcpTool, ToolDefinition, ToolHandler, ToolResult as SdkToolResult,
 };
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
+use sacp::JrConnectionCx;
 use sacp::link::AgentToClient;
 use sacp::schema::{
     Meta, SessionId, SessionNotification, SessionUpdate, Terminal, ToolCall, ToolCallContent,
     ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
-use sacp::JrConnectionCx;
 use serde_json::Value;
 use tokio::sync::RwLock;
 use tracing::instrument;
@@ -180,9 +180,7 @@ impl AcpMcpServer {
         let content = vec![ToolCallContent::Terminal(terminal)];
 
         // Build update fields
-        let mut update_fields = ToolCallUpdateFields::new()
-            .status(status)
-            .content(content);
+        let mut update_fields = ToolCallUpdateFields::new().status(status).content(content);
 
         if let Some(title) = title {
             update_fields = update_fields.title(title);
@@ -225,9 +223,7 @@ impl AcpMcpServer {
         let content = vec![ToolCallContent::Terminal(terminal)];
 
         // Build update fields
-        let mut update_fields = ToolCallUpdateFields::new()
-            .status(status)
-            .content(content);
+        let mut update_fields = ToolCallUpdateFields::new().status(status).content(content);
 
         if let Some(title) = title {
             update_fields = update_fields.title(title);
@@ -343,10 +339,7 @@ impl AcpMcpServer {
         let background_processes = self.background_processes.read().await;
         let connection_cx = self.connection_cx.read().await;
 
-        let mut context = ToolContext::new(
-            session_id.as_deref().unwrap_or("unknown"),
-            cwd.clone(),
-        );
+        let mut context = ToolContext::new(session_id.as_deref().unwrap_or("unknown"), cwd.clone());
 
         if let Some(client) = terminal_client.as_ref() {
             context = context.with_terminal_client(client.clone());
@@ -384,7 +377,7 @@ impl AcpMcpServer {
         tool_use_id: Option<&str>,
     ) -> Result<ToolResult, String> {
         let start_time = Instant::now();
-        
+
         // Log arguments preview (truncated for large inputs)
         let args_str = arguments.to_string();
         let args_preview = if args_str.len() > 500 {
@@ -392,19 +385,21 @@ impl AcpMcpServer {
         } else {
             args_str.clone()
         };
-        
+
         tracing::info!(
             tool_name = %tool_name,
             tool_use_id = ?tool_use_id,
             args_preview = %args_preview,
             "Executing ACP tool"
         );
-        
+
         let context = self.create_tool_context(tool_use_id).await;
 
         // Special handling for Bash tool - use early return to match original behavior
         if tool_name == "Bash" {
-            let result = self.execute_bash_tool(arguments, tool_use_id, &context).await;
+            let result = self
+                .execute_bash_tool(arguments, tool_use_id, &context)
+                .await;
             let elapsed = start_time.elapsed();
             match &result {
                 Ok(r) => {
@@ -429,15 +424,18 @@ impl AcpMcpServer {
         }
 
         // Execute other tools normally
-        let result = self.mcp_server.execute(tool_name, arguments, &context).await;
+        let result = self
+            .mcp_server
+            .execute(tool_name, arguments, &context)
+            .await;
         let elapsed = start_time.elapsed();
-        
+
         let content_preview = if result.content.len() > 300 {
             format!("{}...(truncated)", &result.content[..300])
         } else {
             result.content.clone()
         };
-        
+
         tracing::info!(
             tool_name = %tool_name,
             elapsed_ms = elapsed.as_millis(),
@@ -446,7 +444,7 @@ impl AcpMcpServer {
             content_preview = %content_preview,
             "ACP tool completed"
         );
-        
+
         Ok(result)
     }
 
@@ -516,9 +514,11 @@ impl AcpMcpServer {
         // Send terminal_info notification at start (if we have connection)
         // IMPORTANT: Use ToolCall (not ToolCallUpdate) notification because Zed
         // only creates terminals when terminal_info is in a ToolCall notification.
-        if let (Some(cx), Some(session_id), Some(tool_use_id)) =
-            (connection_cx.as_ref(), session_id_guard.as_ref(), tool_use_id)
-        {
+        if let (Some(cx), Some(session_id), Some(tool_use_id)) = (
+            connection_cx.as_ref(),
+            session_id_guard.as_ref(),
+            tool_use_id,
+        ) {
             // Build meta with terminal_info and optional description for future use
             let mut meta_json = serde_json::json!({
                 "terminal_info": {
@@ -537,7 +537,7 @@ impl AcpMcpServer {
                 tool_use_id,
                 Some(&title),
                 ToolCallStatus::InProgress,
-                Some(&terminal_id),  // Pass terminal_id for content association
+                Some(&terminal_id), // Pass terminal_id for content association
                 meta,
             ) {
                 tracing::debug!("Failed to send terminal_info: {}", e);
@@ -566,9 +566,11 @@ impl AcpMcpServer {
             .await;
 
         // Send terminal_exit notification
-        if let (Some(cx), Some(session_id), Some(tool_use_id)) =
-            (cx_clone.as_ref(), session_id_clone.as_ref(), tool_use_id_clone.as_ref())
-        {
+        if let (Some(cx), Some(session_id), Some(tool_use_id)) = (
+            cx_clone.as_ref(),
+            session_id_clone.as_ref(),
+            tool_use_id_clone.as_ref(),
+        ) {
             let exit_code = match &result {
                 Ok(r) if !r.is_error => 0,
                 _ => 1,
@@ -599,7 +601,7 @@ impl AcpMcpServer {
             is_error = result.as_ref().map(|r| r.is_error).unwrap_or(true),
             "Bash command completed"
         );
-        
+
         result
     }
 
@@ -782,10 +784,7 @@ impl AcpMcpServer {
         tracing::info!("Executing Bash via direct fallback");
 
         // Create a new context WITHOUT terminal_client to force direct execution
-        let fallback_context = ToolContext::new(
-            context.session_id.clone(),
-            context.cwd.clone(),
-        );
+        let fallback_context = ToolContext::new(context.session_id.clone(), context.cwd.clone());
 
         let result = self
             .mcp_server
@@ -800,7 +799,10 @@ impl AcpMcpServer {
 struct PlaceholderHandler;
 
 impl ToolHandler for PlaceholderHandler {
-    fn handle(&self, args: Value) -> BoxFuture<'static, claude_code_agent_sdk::errors::Result<SdkToolResult>> {
+    fn handle(
+        &self,
+        args: Value,
+    ) -> BoxFuture<'static, claude_code_agent_sdk::errors::Result<SdkToolResult>> {
         tracing::warn!("PlaceholderHandler called with args: {:?}", args);
         async move {
             // This should never be called - execution goes through AcpMcpServer::handle_message
@@ -828,14 +830,14 @@ impl SdkMcpServer for AcpMcpServer {
     )]
     async fn handle_message(&self, message: Value) -> claude_code_agent_sdk::errors::Result<Value> {
         let start_time = Instant::now();
-        
-        let method = message["method"]
-            .as_str()
-            .ok_or_else(|| claude_code_agent_sdk::errors::ClaudeError::Transport("Missing method".to_string()))?;
+
+        let method = message["method"].as_str().ok_or_else(|| {
+            claude_code_agent_sdk::errors::ClaudeError::Transport("Missing method".to_string())
+        })?;
 
         // Record method to span
         tracing::Span::current().record("method", method);
-        
+
         tracing::debug!(
             method = %method,
             message_id = ?message.get("id"),
@@ -886,7 +888,9 @@ impl SdkMcpServer for AcpMcpServer {
             "tools/call" => {
                 let params = &message["params"];
                 let tool_name = params["name"].as_str().ok_or_else(|| {
-                    claude_code_agent_sdk::errors::ClaudeError::Transport("Missing tool name".to_string())
+                    claude_code_agent_sdk::errors::ClaudeError::Transport(
+                        "Missing tool name".to_string(),
+                    )
                 })?;
                 let arguments = params["arguments"].clone();
 
@@ -950,7 +954,9 @@ impl SdkMcpServer for AcpMcpServer {
                     tracing::info!("Invoking cancel callback to interrupt Claude CLI");
                     cb();
                 } else {
-                    tracing::warn!("No cancel callback registered, cancellation may not take effect");
+                    tracing::warn!(
+                        "No cancel callback registered, cancellation may not take effect"
+                    );
                 }
 
                 Ok(serde_json::json!({}))
@@ -982,14 +988,13 @@ impl SdkMcpServer for AcpMcpServer {
                         method = %method,
                         "Received unknown method"
                     );
-                    Err(claude_code_agent_sdk::errors::ClaudeError::Transport(format!(
-                        "Unknown method: {}",
-                        method
-                    )))
+                    Err(claude_code_agent_sdk::errors::ClaudeError::Transport(
+                        format!("Unknown method: {}", method),
+                    ))
                 }
             }
         };
-        
+
         let elapsed = start_time.elapsed();
         tracing::debug!(
             method = %method,
@@ -997,7 +1002,7 @@ impl SdkMcpServer for AcpMcpServer {
             is_ok = result.is_ok(),
             "Message handling completed"
         );
-        
+
         result
     }
 
@@ -1159,12 +1164,19 @@ mod tests {
         });
 
         let result = server.handle_message(request).await;
-        assert!(result.is_ok(), "tools/call should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "tools/call should succeed: {:?}",
+            result.err()
+        );
 
         let response = result.unwrap();
 
         // Check response structure matches MCP tool result format
-        assert!(response["content"].is_array(), "Response should have content array");
+        assert!(
+            response["content"].is_array(),
+            "Response should have content array"
+        );
         let content = response["content"].as_array().unwrap();
         assert!(!content.is_empty(), "Content should not be empty");
 
@@ -1174,7 +1186,11 @@ mod tests {
 
         // Should contain "hello" in output (direct execution of echo)
         let text = content[0]["text"].as_str().unwrap();
-        assert!(text.contains("hello"), "Output should contain 'hello', got: {}", text);
+        assert!(
+            text.contains("hello"),
+            "Output should contain 'hello', got: {}",
+            text
+        );
     }
 
     #[tokio::test]

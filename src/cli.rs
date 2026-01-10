@@ -109,10 +109,7 @@ impl Cli {
     /// - Directory: system temp directory
     /// - File: `claude-code-acp-rs-{timestamp}.log`
     pub fn log_path(&self) -> PathBuf {
-        let dir = self
-            .log_dir
-            .clone()
-            .unwrap_or_else(std::env::temp_dir);
+        let dir = self.log_dir.clone().unwrap_or_else(std::env::temp_dir);
 
         let filename = self.log_file.clone().unwrap_or_else(|| {
             let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
@@ -210,8 +207,10 @@ mod tests {
         // Should have correct prefix
         let filename = path.file_name().unwrap().to_str().unwrap();
         assert!(filename.starts_with("claude-code-acp-rs-"));
-        assert!(std::path::Path::new(filename)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("log")));
+        assert!(
+            std::path::Path::new(filename)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("log"))
+        );
     }
 }

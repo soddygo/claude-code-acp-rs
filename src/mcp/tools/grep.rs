@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::process::Stdio;
 use tokio::process::Command;
 
@@ -363,10 +363,12 @@ mod tests {
 
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["pattern"].is_object());
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("pattern")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("pattern"))
+        );
     }
 
     #[tokio::test]
