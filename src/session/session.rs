@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+use tokio::sync::broadcast;
 
 use claude_code_agent_sdk::types::mcp::McpSdkServerConfig;
 use claude_code_agent_sdk::{
@@ -87,6 +88,8 @@ pub struct Session {
     external_mcp_servers: RwLock<Vec<McpServer>>,
     /// Whether external MCP servers have been connected
     external_mcp_connected: AtomicBool,
+    /// Cancel signal sender - used to notify when MCP cancellation is received
+    cancel_sender: broadcast::Sender<()>,
 }
 
 impl Session {
@@ -228,8 +231,12 @@ impl Session {
 
         tracing::debug!(
             session_id = %session_id,
-            has_model = options.model.is_some(),
-            has_base_url = config.base_url.is_some(),
+            model = ?options.model,
+            fallback_model = ?options.fallback_model,
+            max_thinking_tokens = ?options.max_thinking_tokens,
+            base_url = ?config.base_url,
+            api_key = ?config.masked_api_key(),
+            env_vars_count = options.env.len(),
             "Agent config applied"
         );
 
@@ -286,6 +293,9 @@ impl Session {
             "Session created successfully"
         );
 
+        // Clone cwd for converter before moving cwd into the struct
+        let cwd_for_converter = cwd.clone();
+
         Ok(Self {
             session_id,
             cwd,
@@ -293,7 +303,7 @@ impl Session {
             cancelled: Arc::new(AtomicBool::new(false)),
             permission: RwLock::new(PermissionHandler::new()),
             usage_tracker: UsageTracker::new(),
-            converter: NotificationConverter::new(),
+            converter: NotificationConverter::with_cwd(cwd_for_converter),
             connected: AtomicBool::new(false),
             hook_callback_registry,
             permission_checker,
@@ -302,6 +312,7 @@ impl Session {
             background_processes,
             external_mcp_servers: RwLock::new(Vec::new()),
             external_mcp_connected: AtomicBool::new(false),
+            cancel_sender: broadcast::channel(1).0,
         })
     }
 
@@ -610,6 +621,14 @@ impl Session {
         self.client.write().await
     }
 
+    /// Get a receiver for cancel signals
+    ///
+    /// This can be used to listen for MCP cancellation notifications.
+    /// When a cancel notification is received, a signal is sent through the channel.
+    pub fn cancel_receiver(&self) -> broadcast::Receiver<()> {
+        self.cancel_sender.subscribe()
+    }
+
     /// Check if the session has been cancelled
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
@@ -750,14 +769,17 @@ impl Session {
         // Set up cancel callback to interrupt Claude CLI when MCP cancellation is received
         let cancelled_flag = self.cancelled.clone();
         let session_id = self.session_id.clone();
+        let cancel_sender = self.cancel_sender.clone();
 
         self.acp_mcp_server
             .set_cancel_callback(move || {
                 tracing::info!(
                     session_id = %session_id,
-                    "MCP cancel callback invoked, setting session cancelled flag"
+                    "MCP cancel callback invoked, sending cancel signal"
                 );
                 cancelled_flag.store(true, Ordering::SeqCst);
+                // Send cancel signal through the channel
+                let _ = cancel_sender.send(());
             })
             .await;
     }

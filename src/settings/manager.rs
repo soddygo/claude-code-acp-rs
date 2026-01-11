@@ -42,6 +42,11 @@ pub struct Settings {
     #[serde(default)]
     pub api_base_url: Option<String>,
 
+    /// Always enable extended thinking mode
+    /// When true, MAX_THINKING_TOKENS will be set to a default value
+    #[serde(default)]
+    pub always_thinking_enabled: Option<bool>,
+
     /// Allowed tools list (legacy, use permissions instead)
     #[serde(default)]
     pub allowed_tools: Option<Vec<String>>,
@@ -111,6 +116,9 @@ impl Settings {
         }
         if other.api_base_url.is_some() {
             self.api_base_url = other.api_base_url;
+        }
+        if other.always_thinking_enabled.is_some() {
+            self.always_thinking_enabled = other.always_thinking_enabled;
         }
         if other.allowed_tools.is_some() {
             self.allowed_tools = other.allowed_tools;
@@ -305,6 +313,11 @@ impl SettingsManager {
     /// Get the API base URL if configured
     pub fn api_base_url(&self) -> Option<&str> {
         self.settings.api_base_url.as_deref()
+    }
+
+    /// Get whether extended thinking mode is always enabled
+    pub fn always_thinking_enabled(&self) -> bool {
+        self.settings.always_thinking_enabled.unwrap_or(false)
     }
 
     /// Get MCP servers configuration
@@ -534,5 +547,89 @@ mod tests {
         // Reload
         manager.reload();
         assert_eq!(manager.model(), Some("claude-sonnet"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_settings_deserialize_always_thinking_enabled() {
+        // Direct test of Settings deserialization
+        let json_true = r#"{"alwaysThinkingEnabled": true}"#;
+        let settings_true: Settings = serde_json::from_str(json_true).unwrap();
+        assert_eq!(
+            settings_true.always_thinking_enabled,
+            Some(true),
+            "Should parse alwaysThinkingEnabled: true"
+        );
+
+        let json_false = r#"{"alwaysThinkingEnabled": false}"#;
+        let settings_false: Settings = serde_json::from_str(json_false).unwrap();
+        assert_eq!(
+            settings_false.always_thinking_enabled,
+            Some(false),
+            "Should parse alwaysThinkingEnabled: false"
+        );
+
+        let json_none = r#"{"model": "test"}"#;
+        let settings_none: Settings = serde_json::from_str(json_none).unwrap();
+        assert_eq!(
+            settings_none.always_thinking_enabled, None,
+            "Should default to None when not specified"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_always_thinking_enabled_parsing() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings_dir = temp_dir.path().join(".claude");
+        std::fs::create_dir_all(&settings_dir).unwrap();
+
+        // Use settings.local.json (higher priority than user settings)
+        let local_settings_file = settings_dir.join("settings.local.json");
+
+        // Test 1: alwaysThinkingEnabled = true
+        drop(std::fs::remove_file(&local_settings_file));
+        let mut file = std::fs::File::create(&local_settings_file).unwrap();
+        writeln!(file, r#"{{"alwaysThinkingEnabled": true}}"#).unwrap();
+        drop(file);
+
+        let manager = SettingsManager::new(temp_dir.path()).unwrap();
+        assert!(
+            manager.always_thinking_enabled(),
+            "alwaysThinkingEnabled should be true, got {}",
+            manager.always_thinking_enabled()
+        );
+
+        // Test 2: alwaysThinkingEnabled = false
+        drop(std::fs::remove_file(&local_settings_file));
+        let mut file = std::fs::File::create(&local_settings_file).unwrap();
+        writeln!(file, r#"{{"alwaysThinkingEnabled": false}}"#).unwrap();
+        drop(file);
+
+        let manager = SettingsManager::new(temp_dir.path()).unwrap();
+        assert!(
+            !manager.always_thinking_enabled(),
+            "alwaysThinkingEnabled should be false, got {}",
+            manager.always_thinking_enabled()
+        );
+
+        // Test 3: Without alwaysThinkingEnabled (should default to false)
+        // Note: User settings may have alwaysThinkingEnabled: true, so we need to
+        // explicitly set it to false in the project settings to override
+        drop(std::fs::remove_file(&local_settings_file));
+        let mut file = std::fs::File::create(&local_settings_file).unwrap();
+        writeln!(
+            file,
+            r#"{{"model": "claude-opus", "alwaysThinkingEnabled": false}}"#
+        )
+        .unwrap();
+        drop(file);
+
+        let manager = SettingsManager::new(temp_dir.path()).unwrap();
+        assert!(
+            !manager.always_thinking_enabled(),
+            "alwaysThinkingEnabled should be false when explicitly set, got {}",
+            manager.always_thinking_enabled()
+        );
     }
 }

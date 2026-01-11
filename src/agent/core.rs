@@ -12,6 +12,11 @@ use crate::types::AgentConfig;
 ///
 /// The main agent struct that holds configuration and session state.
 /// This is shared across all request handlers.
+///
+/// Configuration is loaded from (in priority order):
+/// 1. Environment variables (e.g., ANTHROPIC_MODEL, ANTHROPIC_BASE_URL)
+/// 2. Settings files (~/.claude/settings.json, .claude/settings.json, etc.)
+/// 3. Defaults
 #[derive(Debug)]
 pub struct ClaudeAcpAgent {
     /// Agent configuration from environment
@@ -21,10 +26,26 @@ pub struct ClaudeAcpAgent {
 }
 
 impl ClaudeAcpAgent {
-    /// Create a new agent with configuration from environment
+    /// Create a new agent with configuration from environment and settings files
+    ///
+    /// Configuration is loaded from:
+    /// 1. Environment variables (highest priority)
+    /// 2. Settings files (~/.claude/settings.json, .claude/settings.json, etc.)
+    /// 3. Defaults
     pub fn new() -> Self {
+        let project_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+        let config = AgentConfig::from_settings_or_env(&project_dir);
+
+        tracing::info!(
+            model = ?config.model,
+            base_url = ?config.base_url,
+            api_key = ?config.masked_api_key(),
+            "Agent initialized with configuration"
+        );
+
         Self {
-            config: AgentConfig::from_env(),
+            config,
             sessions: Arc::new(SessionManager::new()),
         }
     }

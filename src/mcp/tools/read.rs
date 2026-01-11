@@ -140,8 +140,40 @@ impl Tool for ReadTool {
             .map(|(i, line)| format!("{:6}→{}", offset + i + 1, line))
             .collect();
 
-        let result = selected_lines.join("\n");
         let returned_lines = selected_lines.len();
+
+        // Calculate display path:
+        // - If file is under cwd, show relative path with ./ prefix for cwd files
+        // - If file is outside cwd, show absolute path
+        let display_path = if let Ok(rel) = path.strip_prefix(&context.cwd) {
+            let rel_str = rel.to_string_lossy();
+            if rel_str.is_empty() {
+                // File is the cwd directory itself (unlikely)
+                path.display().to_string()
+            } else if rel_str.contains('/') {
+                // File in subdirectory: crates/rcoder/Cargo.toml
+                rel_str.to_string()
+            } else {
+                // File directly in cwd: add ./ prefix
+                format!("./{}", rel_str)
+            }
+        } else {
+            // File outside cwd: show absolute path
+            path.display().to_string()
+        };
+
+        // Add file header with path and line range information
+        let header = format!(
+            "File: {} (lines {}-{} of {}, total {} lines)\n{}\n",
+            display_path,
+            offset + 1,
+            offset + returned_lines.min(total_lines),
+            total_lines,
+            total_lines,
+            "-".repeat(60)
+        );
+
+        let result = format!("{}\n{}", header, selected_lines.join("\n"));
 
         tracing::info!(
             file_path = %path.display(),

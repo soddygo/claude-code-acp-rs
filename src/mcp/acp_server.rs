@@ -241,15 +241,40 @@ impl AcpMcpServer {
             .map_err(|e| format!("Failed to send notification: {}", e))
     }
 
-    /// Send a ToolCallUpdate notification with meta field
+    /// Send a ToolCallUpdate notification with optional fields
     ///
-    /// This is used to send terminal info via the _meta field instead of Terminal API.
+    /// This is used to send tool call updates (including errors) to Zed.
+    ///
+    /// # Parameters
+    ///
+    /// - `cx`: ACP connection context for sending notifications
+    /// - `session_id`: Current session identifier
+    /// - `tool_use_id`: Tool call identifier from Claude
+    /// - `status`: Optional status change (Completed, Failed, InProgress, Pending)
+    /// - `title`: Optional display title for the tool call
+    /// - `content`: Optional content to display (typically error messages for Failed status)
+    /// - `meta`: Optional metadata (terminal_info, terminal_output, terminal_exit)
+    ///
+    /// # Error Content Behavior
+    ///
+    /// When a tool fails, include `content` with the error message so Zed can display it:
+    /// ```ignore
+    /// let content: Option<Vec<ToolCallContent>> = if result.is_error {
+    ///     Some(vec![result.content.clone().into()])
+    /// } else {
+    ///     None
+    /// };
+    /// ```
+    ///
+    /// For successful completion, `content` should be `None` to avoid duplicate output
+    /// (the tool result is sent separately via the result message).
     fn send_tool_call_update_with_meta(
         cx: &JrConnectionCx<AgentToClient>,
         session_id: &str,
         tool_use_id: &str,
         status: Option<ToolCallStatus>,
         title: Option<&str>,
+        content: Option<Vec<ToolCallContent>>,
         meta: Option<Meta>,
     ) -> Result<(), String> {
         // Build update fields
@@ -263,6 +288,10 @@ impl AcpMcpServer {
             update_fields = update_fields.title(title);
         }
 
+        if let Some(content) = content {
+            update_fields = update_fields.content(content);
+        }
+
         // Build and send notification
         let tool_call_id = ToolCallId::new(tool_use_id.to_string());
         let mut update = ToolCallUpdate::new(tool_call_id, update_fields);
@@ -273,7 +302,7 @@ impl AcpMcpServer {
         }
 
         let notification = SessionNotification::new(
-            SessionId::new(session_id),
+            SessionId::new(session_id.to_string()),
             SessionUpdate::ToolCallUpdate(update),
         );
 
@@ -428,22 +457,104 @@ impl AcpMcpServer {
             .mcp_server
             .execute(tool_name, arguments, &context)
             .await;
+
+        #[cfg(feature = "verbose-debug")]
+        tracing::debug!("Tool execution returned, preparing to send completion notification");
+
+        // Send completion notification to Zed (required for non-Bash tools)
+        // Use RAII scoping to ensure locks are released promptly
+        {
+            #[cfg(feature = "verbose-debug")]
+            tracing::debug!("Acquiring locks for completion notification");
+
+            let connection_cx = self.connection_cx.read().await;
+            let session_id_guard = self.session_id.read().await;
+
+            #[cfg(feature = "verbose-debug")]
+            tracing::debug!("Locks acquired, checking if we have all required data");
+
+            if let (Some(cx), Some(session_id), Some(tool_use_id)) = (
+                connection_cx.as_ref(),
+                session_id_guard.as_ref(),
+                tool_use_id,
+            ) {
+                let status = if result.is_error {
+                    ToolCallStatus::Failed
+                } else {
+                    ToolCallStatus::Completed
+                };
+
+                #[cfg(feature = "verbose-debug")]
+                tracing::debug!(
+                    tool_name = %tool_name,
+                    tool_use_id = %tool_use_id,
+                    status = ?status,
+                    is_error = result.is_error,
+                    content_len = result.content.len(),
+                    "Sending completion notification"
+                );
+
+                // Prepare content for the notification
+                // For errors, include the error message so Zed can display it
+                let content: Option<Vec<ToolCallContent>> = if result.is_error {
+                    Some(vec![result.content.clone().into()])
+                } else {
+                    // For successful completion, no need to send content
+                    // The tool result will be sent separately via result message
+                    None
+                };
+
+                // Send completion notification with content for errors
+                if let Err(e) = Self::send_tool_call_update_with_meta(
+                    cx,
+                    session_id,
+                    tool_use_id,
+                    Some(status),
+                    None,
+                    content,
+                    None,
+                ) {
+                    tracing::debug!("Failed to send tool completion notification: {}", e);
+                }
+
+                #[cfg(feature = "verbose-debug")]
+                tracing::debug!("Completion notification sent successfully");
+            }
+            // Locks are automatically released when this block ends
+
+            #[cfg(feature = "verbose-debug")]
+            tracing::debug!("RAII block ending, locks will be released");
+        }
+
+        #[cfg(feature = "verbose-debug")]
+        tracing::debug!("RAII block ended, locks released, continuing execution");
+
         let elapsed = start_time.elapsed();
 
-        let content_preview = if result.content.len() > 300 {
-            format!("{}...(truncated)", &result.content[..300])
-        } else {
-            result.content.clone()
-        };
+        #[cfg(feature = "verbose-debug")]
+        {
+            let content_len = result.content.len();
+            let would_truncate = content_len > 300;
+
+            tracing::debug!(
+                tool_name = %tool_name,
+                elapsed_ms = elapsed.as_millis(),
+                content_len,
+                would_truncate,
+                "About to log completion"
+            );
+        }
 
         tracing::info!(
             tool_name = %tool_name,
             elapsed_ms = elapsed.as_millis(),
             is_error = result.is_error,
             content_len = result.content.len(),
-            content_preview = %content_preview,
             "ACP tool completed"
         );
+
+        #[cfg(feature = "verbose-debug")]
+        tracing::debug!("About to return Ok(result) from execute_tool");
 
         Ok(result)
     }
@@ -587,6 +698,7 @@ impl AcpMcpServer {
                 tool_use_id,
                 Some(ToolCallStatus::Completed),
                 None,
+                None, // No content for terminal_exit
                 meta,
             ) {
                 tracing::debug!("Failed to send terminal_exit: {}", e);
@@ -683,8 +795,9 @@ impl AcpMcpServer {
                             cx,
                             session_id,
                             tool_use_id,
+                            None, // No status change for terminal_output
                             None,
-                            None,
+                            None, // No content for terminal_output
                             meta,
                         ));
                     }
@@ -900,15 +1013,29 @@ impl SdkMcpServer for AcpMcpServer {
                     .and_then(|m| m.get("claudecode/toolUseId"))
                     .and_then(|v| v.as_str());
 
+                // Log full _meta for debugging
+                let meta_preview = params.get("_meta").map(|m| {
+                    if m.as_object().map(|o| o.len()).unwrap_or(0) > 1 {
+                        format!("{:?}", m)
+                    } else {
+                        format!("{{claudecode/toolUseId}}")
+                    }
+                });
+
                 tracing::info!(
                     tool_name = %tool_name,
                     tool_use_id = ?tool_use_id,
                     has_meta = params.get("_meta").is_some(),
+                    meta_preview = ?meta_preview,
                     args_size = arguments.to_string().len(),
                     "Received tools/call request from Claude CLI"
                 );
 
                 let tool_start = Instant::now();
+
+                #[cfg(feature = "verbose-debug")]
+                tracing::debug!("About to call execute_tool");
+
                 let result = self
                     .execute_tool(tool_name, arguments, tool_use_id)
                     .await
@@ -920,6 +1047,10 @@ impl SdkMcpServer for AcpMcpServer {
                         );
                         claude_code_agent_sdk::errors::ClaudeError::Transport(e)
                     })?;
+
+                #[cfg(feature = "verbose-debug")]
+                tracing::debug!("execute_tool returned successfully");
+
                 let tool_elapsed = tool_start.elapsed();
 
                 tracing::info!(
@@ -930,13 +1061,21 @@ impl SdkMcpServer for AcpMcpServer {
                     "Tool execution completed"
                 );
 
-                Ok(serde_json::json!({
+                #[cfg(feature = "verbose-debug")]
+                tracing::debug!("About to create response JSON");
+
+                let response = Ok(serde_json::json!({
                     "content": [{
                         "type": "text",
                         "text": result.content
                     }],
                     "is_error": result.is_error
-                }))
+                }));
+
+                #[cfg(feature = "verbose-debug")]
+                tracing::debug!("Response JSON created successfully");
+
+                response
             }
             // MCP notifications - these don't expect a response but we return empty success
             "notifications/cancelled" => {
@@ -1405,6 +1544,136 @@ mod tests {
             tool_result.content.contains("acp_server.rs") || !tool_result.is_error,
             "Should find acp_server.rs or no error, got: {}",
             tool_result.content
+        );
+    }
+
+    // ============================================================
+    // Error message propagation tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_read_tool_error_propagation() {
+        // Test that Read tool properly reports errors when file doesn't exist
+        let server = AcpMcpServer::new("test-server", "1.0.0");
+        server.set_cwd(std::env::temp_dir()).await;
+        server.set_session_id("test-session").await;
+
+        // Try to read a non-existent file
+        let result = server
+            .execute_tool(
+                "Read",
+                serde_json::json!({
+                    "file_path": "/nonexistent/path/file.txt"
+                }),
+                None,
+            )
+            .await;
+
+        assert!(result.is_ok(), "Read should return a result");
+        let tool_result = result.unwrap();
+        assert!(
+            tool_result.is_error,
+            "Reading non-existent file should be marked as error"
+        );
+        assert!(
+            !tool_result.content.is_empty(),
+            "Error should have a message"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_error_content_preparation_logic() {
+        // Test the logic that prepares content for error notifications
+        use super::ToolResult;
+
+        // Simulate successful result
+        let success_result = ToolResult::success("Operation completed".to_string());
+        let content_success: Option<Vec<ToolCallContent>> = if success_result.is_error {
+            Some(vec![success_result.content.clone().into()])
+        } else {
+            None
+        };
+        assert!(
+            content_success.is_none(),
+            "Successful results should not include content in notification"
+        );
+
+        // Simulate error result
+        let error_message = "File not found: /path/to/file.txt";
+        let error_result = ToolResult::error(error_message.to_string());
+        let content_error: Option<Vec<ToolCallContent>> = if error_result.is_error {
+            Some(vec![error_result.content.clone().into()])
+        } else {
+            None
+        };
+        assert!(
+            content_error.is_some(),
+            "Error results should include content in notification"
+        );
+        let content_vec = content_error.unwrap();
+        assert_eq!(content_vec.len(), 1, "Should have one content item");
+
+        // Verify the content contains the error message
+        // ToolCallContent::Content(Content { content: ContentBlock::Text(TextContent) })
+        match &content_vec[0] {
+            ToolCallContent::Content(content) => match &content.content {
+                sacp::schema::ContentBlock::Text(text) => {
+                    assert_eq!(text.text, error_message, "Error message should match");
+                }
+                _ => panic!("Content block should be Text type"),
+            },
+            _ => panic!("Content should be Content type"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_glob_tool_error_on_invalid_pattern() {
+        // Test that Glob tool handles invalid patterns correctly
+        let server = AcpMcpServer::new("test-server", "1.0.0");
+        let cwd = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        server.set_cwd(&cwd).await;
+        server.set_session_id("test-session").await;
+
+        // Use an invalid glob pattern (unclosed bracket)
+        let result = server
+            .execute_tool(
+                "Glob",
+                serde_json::json!({
+                    "pattern": "src/**/[unclosed"
+                }),
+                None,
+            )
+            .await;
+
+        // Result should be OK but may contain an error
+        assert!(result.is_ok(), "Glob should return a result");
+        let _tool_result = result.unwrap();
+        // The glob implementation may not fail on invalid patterns, so we just
+        // verify it returns without panicking
+    }
+
+    #[tokio::test]
+    async fn test_bash_error_with_nonexistent_command() {
+        // Test that Bash tool properly reports errors for invalid commands
+        let server = AcpMcpServer::new("test-server", "1.0.0");
+        server.set_cwd(std::env::temp_dir()).await;
+        server.set_session_id("test-session").await;
+
+        let result = server
+            .execute_tool(
+                "Bash",
+                serde_json::json!({
+                    "command": "this_command_definitely_does_not_exist_12345"
+                }),
+                None,
+            )
+            .await;
+
+        assert!(result.is_ok(), "Bash should return a result");
+        let tool_result = result.unwrap();
+        assert!(
+            tool_result.is_error,
+            "Non-existent command should be marked as error"
         );
     }
 }

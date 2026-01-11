@@ -276,7 +276,8 @@ pub async fn run_acp_with_cli(cli: &Cli) -> anyhow::Result<()> {
     emit_agent_ready_trace(startup_time.elapsed()).await;
 
     // Run the server (this is a long-running span, won't appear until shutdown)
-    let result = run_acp_server().await.map_err(Into::into);
+    // Use Box::pin to reduce stack size of large future (~23KB)
+    let result = Box::pin(run_acp_server()).await.map_err(Into::into);
 
     // Emit shutdown trace
     emit_agent_shutdown_trace(startup_time.elapsed()).await;
@@ -329,13 +330,25 @@ pub async fn run_acp() -> Result<(), sacp::Error> {
         .with_writer(std::io::stderr)
         .init();
 
-    run_acp_server().await
+    // Use Box::pin to reduce stack size of large future (~23KB)
+    Box::pin(run_acp_server()).await
 }
 
 /// Internal server implementation
 ///
 /// This contains the actual ACP server logic, shared by both `run_acp()` and `run_acp_with_cli()`.
+///
+/// # Large Future Note
+///
+/// This function generates a large future (~22KB) due to the complex handler chain with
+/// nested closures for tracing spans. This is acceptable because:
+/// 1. The function is always called via `Box::pin` at the call sites, which moves the
+///    future to the heap and reduces stack memory usage
+/// 2. The builder pattern with nested closures is the idiomatic way to use the sacp SDK
+/// 3. Extracting handlers into separate functions doesn't help due to the builder's
+///    ownership requirements
 #[tracing::instrument(name = "acp_server_main")]
+#[allow(clippy::large_futures)]
 async fn run_acp_server() -> Result<(), sacp::Error> {
     let server_start_time = std::time::Instant::now();
 
@@ -617,13 +630,12 @@ async fn run_acp_server() -> Result<(), sacp::Error> {
             );
             e
         })
-        .map(|result| {
+        .inspect(|_result| {
             let uptime = server_start_time.elapsed();
             tracing::info!(
                 uptime_secs = uptime.as_secs(),
                 uptime_ms = uptime.as_millis(),
                 "ACP server shutting down gracefully"
             );
-            result
         })
 }

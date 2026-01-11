@@ -11,6 +11,14 @@ use clap::Parser;
 #[command(name = "claude-code-acp-rs")]
 #[command(version, about, long_about = None)]
 pub struct Cli {
+    /// Run in ACP server mode (stdio communication with editor)
+    #[arg(long)]
+    pub acp: bool,
+
+    /// Execute prompt directly in headless mode
+    #[arg(short = 'p', long, value_name = "PROMPT")]
+    pub prompt: Option<String>,
+
     /// Enable diagnostic mode (auto-log to temp file)
     #[arg(short, long)]
     pub diagnostic: bool,
@@ -48,6 +56,8 @@ pub struct Cli {
 impl Default for Cli {
     fn default() -> Self {
         Self {
+            acp: false,
+            prompt: None,
             diagnostic: false,
             log_dir: None,
             log_file: None,
@@ -107,12 +117,12 @@ impl Cli {
     ///
     /// Uses the specified log directory and file name, or defaults to:
     /// - Directory: system temp directory
-    /// - File: `claude-code-acp-rs-{timestamp}.log`
+    /// - File: `claude-code-acp-rs-YYYYMMDD-HHMMSS.log`
     pub fn log_path(&self) -> PathBuf {
         let dir = self.log_dir.clone().unwrap_or_else(std::env::temp_dir);
 
         let filename = self.log_file.clone().unwrap_or_else(|| {
-            let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+            let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
             format!("claude-code-acp-rs-{timestamp}.log")
         });
 
@@ -212,5 +222,33 @@ mod tests {
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("log"))
         );
+    }
+
+    #[test]
+    fn test_cli_acp_mode() {
+        let cli = Cli::parse_from(["claude-code-acp-rs", "--acp"]);
+        assert!(cli.acp);
+        assert!(cli.prompt.is_none());
+    }
+
+    #[test]
+    fn test_cli_headless_mode() {
+        let cli = Cli::parse_from(["claude-code-acp-rs", "-p", "test prompt"]);
+        assert!(!cli.acp);
+        assert_eq!(cli.prompt, Some("test prompt".to_string()));
+    }
+
+    #[test]
+    fn test_cli_headless_mode_long() {
+        let cli = Cli::parse_from(["claude-code-acp-rs", "--prompt", "test prompt"]);
+        assert!(!cli.acp);
+        assert_eq!(cli.prompt, Some("test prompt".to_string()));
+    }
+
+    #[test]
+    fn test_cli_no_mode() {
+        let cli = Cli::parse_from(["claude-code-acp-rs"]);
+        assert!(!cli.acp);
+        assert!(cli.prompt.is_none());
     }
 }

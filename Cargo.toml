@@ -1,6 +1,6 @@
 [package]
 name = "claude-code-acp-rs"
-version = "0.1.4"
+version = "0.1.5"
 authors = ["guochao.song <soddygo@qq.com>"]
 edition = "2024"
 rust-version = "1.90"
@@ -82,6 +82,9 @@ walkdir = "2.5"
 # Regular expressions (for rule parsing)
 regex = "1.10"
 
+# Lazy static initialization
+once_cell = "1.20"
+
 # CLI argument parsing
 clap = { version = "4.5", features = ["derive", "env"] }
 
@@ -108,11 +111,14 @@ tracing-opentelemetry = { version = "0.32", optional = true }
 tokio-test = "0.4"
 pretty_assertions = "1"
 tempfile = "3"
+serial_test = "3"
 
 [features]
 default = ["otel"]
 # mcp = ["rmcp"]
 otel = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "tracing-opentelemetry"]
+# Enable verbose debug logging for troubleshooting
+verbose-debug = []
 
 [lints.rust]
 future_incompatible = { level = "warn", priority = -1 }

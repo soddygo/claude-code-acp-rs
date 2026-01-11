@@ -60,9 +60,49 @@ Configure Zed to use this agent by specifying `claude-code-acp-rs` as the agent 
 ### Environment Variables
 
 - `ANTHROPIC_BASE_URL`: Custom API base URL
-- `ANTHROPIC_AUTH_TOKEN`: Authentication token
+- `ANTHROPIC_API_KEY`: API key (preferred)
+- `ANTHROPIC_AUTH_TOKEN`: Authentication token (legacy, fallback)
 - `ANTHROPIC_MODEL`: Model to use (default: claude-sonnet-4-20250514)
 - `ANTHROPIC_SMALL_FAST_MODEL`: Model for fast operations
+- `MAX_THINKING_TOKENS`: Maximum tokens for extended thinking mode
+
+### Configuration Files
+
+The agent can also load configuration from Claude Code settings files. When environment variables are not set, the agent will read from:
+
+- `~/.claude/settings.json` (user settings)
+- `.claude/settings.json` (project settings)
+- `.claude/settings.local.json` (local settings)
+
+**Configuration priority (highest to lowest):**
+1. Environment variables
+2. Settings files - Top-level fields
+3. Settings files - `env` object
+4. Defaults
+
+**Supported settings formats:**
+
+Using top-level fields:
+```json
+{
+  "model": "claude-opus-4-20250514",
+  "smallFastModel": "claude-haiku-4-20250514",
+  "apiBaseUrl": "https://api.anthropic.com"
+}
+```
+
+Using `env` object (compatible with Claude Code CLI):
+```json
+{
+  "env": {
+    "ANTHROPIC_MODEL": "claude-opus-4-20250514",
+    "ANTHROPIC_SMALL_FAST_MODEL": "claude-haiku-4-20250514",
+    "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
+  }
+}
+```
+
+This allows you to use your existing Claude Code configuration without setting environment variables.
 
 ## OpenTelemetry Tracing
 

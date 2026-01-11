@@ -24,10 +24,18 @@ use super::extract_tool_info;
 /// Notification converter for transforming SDK messages to ACP notifications
 ///
 /// Maintains a cache of tool uses to correlate tool_use blocks with their results.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct NotificationConverter {
     /// Cache of tool use entries, keyed by tool_use_id
     tool_use_cache: DashMap<String, ToolUseEntry>,
+    /// Current working directory for relative path display
+    cwd: Option<std::path::PathBuf>,
+}
+
+impl Default for NotificationConverter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NotificationConverter {
@@ -35,6 +43,19 @@ impl NotificationConverter {
     pub fn new() -> Self {
         Self {
             tool_use_cache: DashMap::new(),
+            cwd: None,
+        }
+    }
+
+    /// Create a new notification converter with working directory
+    ///
+    /// # Arguments
+    ///
+    /// * `cwd` - The current working directory for computing relative paths
+    pub fn with_cwd(cwd: std::path::PathBuf) -> Self {
+        Self {
+            tool_use_cache: DashMap::new(),
+            cwd: Some(cwd),
         }
     }
 
@@ -266,7 +287,7 @@ impl NotificationConverter {
         session_id: &SessionId,
         tool_use: &ToolUseBlock,
     ) -> SessionNotification {
-        let tool_info = extract_tool_info(&tool_use.name, &tool_use.input);
+        let tool_info = extract_tool_info(&tool_use.name, &tool_use.input, self.cwd.as_ref());
 
         let tool_call_id = ToolCallId::new(tool_use.id.clone());
         let tool_kind = Self::map_tool_kind(tool_info.kind);

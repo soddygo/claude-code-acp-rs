@@ -10,6 +10,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::mcp::tools::bash::contains_shell_operator;
 
+/// Cached regex for parsing permission rules
+/// Pattern: ToolName or ToolName(argument)
+/// Compiled once and reused for better performance
+static RULE_REGEX: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+    // This regex is statically known and will always compile correctly
+    Regex::new(r"^(\w+)(?:\((.+)\))?$").expect("Invalid hardcoded regex pattern")
+});
+
 /// ACP tool name prefix
 const ACP_TOOL_PREFIX: &str = "mcp__acp__";
 
@@ -114,10 +122,9 @@ pub struct ParsedRule {
 impl ParsedRule {
     /// Parse a rule string like "Read", "Read(./.env)", "Bash(npm run:*)"
     pub fn parse(rule: &str) -> Self {
-        // Regex pattern: ToolName or ToolName(argument)
-        let re = Regex::new(r"^(\w+)(?:\((.+)\))?$").expect("Invalid regex");
-
-        if let Some(caps) = re.captures(rule) {
+        // Use cached regex (compiled once at first use)
+        // The regex is statically known and guaranteed to compile correctly
+        if let Some(caps) = RULE_REGEX.captures(rule) {
             let tool_name = caps.get(1).map_or("", |m| m.as_str()).to_string();
             let argument = caps.get(2).map(|m| m.as_str().to_string());
 

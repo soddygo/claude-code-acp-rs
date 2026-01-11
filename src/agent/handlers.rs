@@ -19,6 +19,7 @@ use sacp::schema::{
     SessionModeId, SessionModeState, SessionNotification, SessionUpdate, SetSessionModeRequest,
     SetSessionModeResponse, StopReason, TextContent,
 };
+use tokio::sync::broadcast;
 use tracing::instrument;
 
 use crate::session::{PermissionMode, SessionManager};
@@ -98,7 +99,7 @@ pub async fn handle_new_session(
                 sacp::schema::McpServer::Stdio(stdio) => format!("{}(stdio:{})", stdio.name, stdio.command.display()),
                 sacp::schema::McpServer::Http(http) => format!("{}(http:{})", http.name, http.url),
                 sacp::schema::McpServer::Sse(sse) => format!("{}(sse:{})", sse.name, sse.url),
-                _ => format!("unknown"),
+                _ => "unknown".to_string(),
             }).collect::<Vec<_>>(),
             "External MCP servers from client"
         );
@@ -347,6 +348,7 @@ pub async fn handle_prompt(
     let client = session.client().await;
     let mut stream = client.receive_response();
     let converter = session.converter();
+    let mut cancel_rx = session.cancel_receiver();
 
     // Track streaming statistics
     let mut message_count = 0u64;
@@ -355,7 +357,55 @@ pub async fn handle_prompt(
 
     // Process streaming responses
     let stream_start = Instant::now();
-    while let Some(result) = stream.next().await {
+    loop {
+        // Check for cancel signal from MCP cancellation notification
+        match cancel_rx.try_recv() {
+            Ok(_) => {
+                tracing::info!(
+                    session_id = %session_id,
+                    "Cancel signal received from MCP notification, interrupting CLI"
+                );
+                // Send interrupt signal to Claude CLI
+                if let Err(e) = client.interrupt().await {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        error = %e,
+                        "Failed to send interrupt signal to Claude CLI"
+                    );
+                }
+                // Set cancelled flag
+                session.cancel().await;
+                break;
+            }
+            Err(broadcast::error::TryRecvError::Empty) => {
+                // No cancel signal, continue processing
+            }
+            Err(broadcast::error::TryRecvError::Closed) => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    "Cancel channel closed, no longer listening for cancel signals"
+                );
+                break;
+            }
+            Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                // Lagged means we missed some messages, but the most recent value is available
+                // Treat this as a cancel signal
+                tracing::info!(
+                    session_id = %session_id,
+                    "Cancel signal lagged, treating as cancel notification"
+                );
+                if let Err(e) = client.interrupt().await {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        error = %e,
+                        "Failed to send interrupt signal to Claude CLI"
+                    );
+                }
+                session.cancel().await;
+                break;
+            }
+        }
+
         // Check if cancelled
         if session.is_cancelled() {
             let elapsed = prompt_start.elapsed();
@@ -369,8 +419,12 @@ pub async fn handle_prompt(
             return Ok(PromptResponse::new(StopReason::EndTurn));
         }
 
-        match result {
-            Ok(message) => {
+        // Process next message from stream with timeout
+        let msg_result =
+            tokio::time::timeout(tokio::time::Duration::from_millis(100), stream.next()).await;
+
+        match msg_result {
+            Ok(Some(Ok(message))) => {
                 message_count += 1;
 
                 // Convert SDK message to ACP notifications
@@ -397,7 +451,11 @@ pub async fn handle_prompt(
                     "Processed message from Claude CLI"
                 );
             }
-            Err(e) => {
+            Ok(None) => {
+                // Stream ended normally
+                break;
+            }
+            Ok(Some(Err(e))) => {
                 error_count += 1;
                 tracing::error!(
                     session_id = %session_id,
@@ -406,6 +464,10 @@ pub async fn handle_prompt(
                     "Error receiving message from Claude CLI"
                 );
                 // Continue processing - don't fail on individual message errors
+            }
+            Err(_) => {
+                // Timeout - continue loop to check cancel signal again
+                continue;
             }
         }
     }
