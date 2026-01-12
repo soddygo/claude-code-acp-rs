@@ -17,13 +17,12 @@ use uuid::Uuid;
 
 use super::base::{Tool, ToolKind};
 use crate::mcp::registry::{ToolContext, ToolResult};
-use crate::session::{BackgroundTerminal, TerminalExitStatus};
+use crate::session::{BackgroundTerminal, ChildHandle, TerminalExitStatus, WrappedChild};
 use crate::terminal::TerminalClient;
 
-/// Default command timeout in milliseconds
-const DEFAULT_TIMEOUT_MS: u64 = 120_000; // 2 minutes
-/// Maximum command timeout in milliseconds
-const MAX_TIMEOUT_MS: u64 = 600_000; // 10 minutes
+// Process group management
+use process_wrap::tokio::*;
+
 /// Maximum output size in characters
 const MAX_OUTPUT_SIZE: usize = 30_000;
 
@@ -158,12 +157,8 @@ impl BashTool {
     async fn execute_foreground(&self, params: &BashInput, context: &ToolContext) -> ToolResult {
         let cmd_start = Instant::now();
 
-        // Validate and set timeout
-        let timeout_ms = params
-            .timeout
-            .unwrap_or(DEFAULT_TIMEOUT_MS)
-            .min(MAX_TIMEOUT_MS);
-        let timeout_duration = Duration::from_millis(timeout_ms);
+        // Use timeout as specified by user, without limiting maximum
+        let timeout_ms = params.timeout;
 
         // Stage 1: Build the command
         let build_start = Instant::now();
@@ -178,33 +173,52 @@ impl BashTool {
         tracing::debug!(
             command = %params.command,
             build_duration_ms = build_duration.as_millis(),
-            timeout_ms = timeout_ms,
+            timeout_ms = ?timeout_ms,
             "Bash command built"
         );
 
-        // Stage 2: Execute with timeout
+        // Stage 2: Execute with or without timeout
         let exec_start = Instant::now();
-        let output = match timeout(timeout_duration, cmd.output()).await {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => {
-                let exec_duration = exec_start.elapsed();
-                tracing::error!(
-                    command = %params.command,
-                    exec_duration_ms = exec_duration.as_millis(),
-                    error = %e,
-                    "Bash command execution failed"
-                );
-                return ToolResult::error(format!("Failed to execute command: {}", e));
+        let output = if let Some(ms) = timeout_ms {
+            // User specified timeout - apply it
+            let timeout_duration = Duration::from_millis(ms);
+            match timeout(timeout_duration, cmd.output()).await {
+                Ok(Ok(output)) => output,
+                Ok(Err(e)) => {
+                    let exec_duration = exec_start.elapsed();
+                    tracing::error!(
+                        command = %params.command,
+                        exec_duration_ms = exec_duration.as_millis(),
+                        error = %e,
+                        "Bash command execution failed"
+                    );
+                    return ToolResult::error(format!("Failed to execute command: {}", e));
+                }
+                Err(_) => {
+                    let exec_duration = exec_start.elapsed();
+                    tracing::warn!(
+                        command = %params.command,
+                        exec_duration_ms = exec_duration.as_millis(),
+                        timeout_ms = ms,
+                        "Bash command timed out"
+                    );
+                    return ToolResult::error(format!("Command timed out after {}ms", ms));
+                }
             }
-            Err(_) => {
-                let exec_duration = exec_start.elapsed();
-                tracing::warn!(
-                    command = %params.command,
-                    exec_duration_ms = exec_duration.as_millis(),
-                    timeout_ms = timeout_ms,
-                    "Bash command timed out"
-                );
-                return ToolResult::error(format!("Command timed out after {}ms", timeout_ms));
+        } else {
+            // No timeout specified - execute without timeout limit
+            match cmd.output().await {
+                Ok(output) => output,
+                Err(e) => {
+                    let exec_duration = exec_start.elapsed();
+                    tracing::error!(
+                        command = %params.command,
+                        exec_duration_ms = exec_duration.as_millis(),
+                        error = %e,
+                        "Bash command execution failed"
+                    );
+                    return ToolResult::error(format!("Failed to execute command: {}", e));
+                }
             }
         };
         let exec_duration = exec_start.elapsed();
@@ -293,29 +307,42 @@ impl BashTool {
             }
         };
 
-        // Build the command
-        let mut cmd = Command::new("bash");
-        cmd.arg("-c")
-            .arg(&params.command)
-            .current_dir(&context.cwd)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        // Build the command with process-wrap for process group support
+        let mut cmd = CommandWrap::with_new("bash", |c| {
+            c.arg("-c")
+                .arg(&params.command)
+                .current_dir(&context.cwd)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+        });
+
+        // Add platform-specific wrapper for process group management
+        #[cfg(unix)]
+        cmd.wrap(ProcessGroup::leader());
+
+        #[cfg(windows)]
+        cmd.wrap(JobObject::new());
 
         // Spawn the process
-        let mut child = match cmd.spawn() {
+        let mut wrapped_child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => return ToolResult::error(format!("Failed to spawn command: {}", e)),
         };
 
+        // Extract stdout and stderr BEFORE wrapping (ChildWrapper doesn't expose them)
+        let stdout = wrapped_child.stdout().take();
+        let stderr = wrapped_child.stderr().take();
+
         // Generate shell ID
         let shell_id = format!("shell-{}", Uuid::new_v4().simple());
 
-        // Take stdout and stderr
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
+        // Create wrapped child handle (stdout/stderr not stored in handle)
+        let child_handle = ChildHandle::Wrapped {
+            child: Arc::new(tokio::sync::Mutex::new(WrappedChild::new(wrapped_child))),
+        };
 
         // Create background terminal
-        let terminal = BackgroundTerminal::new_running(child);
+        let terminal = BackgroundTerminal::new_running(child_handle);
 
         // Get reference to output buffer for the read task
         let output_buffer = match &terminal {
@@ -340,8 +367,9 @@ impl BashTool {
                 while let Ok(Some(line)) = lines.next_line().await {
                     combined_output.push_str(&line);
                     combined_output.push('\n');
-                    output_buffer.lock().await.push_str(&line);
-                    output_buffer.lock().await.push('\n');
+                    let mut buffer = output_buffer.lock().await;
+                    buffer.push_str(&line);
+                    buffer.push('\n');
                 }
             }
 
@@ -355,25 +383,28 @@ impl BashTool {
                     }
                     combined_output.push_str(&line);
                     combined_output.push('\n');
-                    output_buffer.lock().await.push_str(&line);
-                    output_buffer.lock().await.push('\n');
+                    let mut buffer = output_buffer.lock().await;
+                    buffer.push_str(&line);
+                    buffer.push('\n');
                 }
             }
 
             // Wait for process to finish and update terminal state
-            if let Some(terminal_ref) = manager_clone.get_mut(&shell_id_clone) {
+            // Use get() instead of get_mut() because BackgroundTerminal contains ChildHandle
+            // We only need a shared reference to clone the ChildHandle
+            if let Some(terminal_ref) = manager_clone.get(&shell_id_clone) {
                 if let BackgroundTerminal::Running { child, .. } = &*terminal_ref {
-                    let mut child_guard = child.lock().await;
-                    if let Ok(status) = child_guard.wait().await {
+                    // Clone the ChildHandle to hold it across await points
+                    let mut child_handle = child.clone();
+                    drop(terminal_ref); // Release DashMap read lock before await
+
+                    // ChildHandle::wait() handles locking internally
+                    if let Ok(status) = child_handle.wait().await {
                         let exit_code = status.code().unwrap_or(-1);
-                        drop(child_guard);
-                        drop(terminal_ref);
                         manager_clone
                             .finish_terminal(&shell_id_clone, TerminalExitStatus::Exited(exit_code))
                             .await;
                     } else {
-                        drop(child_guard);
-                        drop(terminal_ref);
                         manager_clone
                             .finish_terminal(&shell_id_clone, TerminalExitStatus::Aborted)
                             .await;
@@ -403,12 +434,8 @@ impl BashTool {
         terminal_client: &Arc<TerminalClient>,
         context: &ToolContext,
     ) -> ToolResult {
-        // Validate and set timeout
-        let timeout_ms = params
-            .timeout
-            .unwrap_or(DEFAULT_TIMEOUT_MS)
-            .min(MAX_TIMEOUT_MS);
-        let timeout_duration = Duration::from_millis(timeout_ms);
+        // Use timeout as specified by user, without limiting maximum
+        let timeout_ms = params.timeout;
 
         // Create terminal with bash -c command
         let terminal_id = match terminal_client
@@ -435,12 +462,19 @@ impl BashTool {
             // Continue even if notification fails - tool should still work
         }
 
-        // Wait for command to exit with timeout
-        let exit_result = timeout(
-            timeout_duration,
-            terminal_client.wait_for_exit(terminal_id.clone()),
-        )
-        .await;
+        // Wait for command to exit with optional timeout
+        let exit_result = if let Some(ms) = timeout_ms {
+            // User specified timeout - apply it
+            let timeout_duration = Duration::from_millis(ms);
+            timeout(
+                timeout_duration,
+                terminal_client.wait_for_exit(terminal_id.clone()),
+            )
+            .await
+        } else {
+            // No timeout - wait indefinitely
+            Ok(terminal_client.wait_for_exit(terminal_id.clone()).await)
+        };
 
         // Get output regardless of exit status
         let output = match terminal_client.output(terminal_id.clone()).await {
@@ -488,10 +522,14 @@ impl BashTool {
                 }
             }
             Ok(Err(e)) => ToolResult::error(format!("Terminal execution failed: {}", e)),
-            Err(_) => ToolResult::error(format!(
-                "Command timed out after {}ms\n{}",
-                timeout_ms, output
-            )),
+            Err(_) => {
+                // Timeout occurred - timeout_ms must be Some in this branch
+                let ms = timeout_ms.unwrap_or(0);
+                ToolResult::error(format!(
+                    "Command timed out after {}ms\n{}",
+                    ms, output
+                ))
+            }
         }
     }
 

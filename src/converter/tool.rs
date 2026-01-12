@@ -219,6 +219,26 @@ pub fn extract_tool_info(name: &str, input: &serde_json::Value, cwd: Option<&Pat
 
         "AskUserQuestion" => ToolInfo::new("Ask question", ToolKind::Other),
 
+        "SlashCommand" => {
+            let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let title = if command.is_empty() {
+                "Slash command".to_string()
+            } else {
+                format!("/{}", command)
+            };
+            ToolInfo::new(title, ToolKind::Other)
+        }
+
+        "Skill" => {
+            let skill = input.get("skill").and_then(|v| v.as_str()).unwrap_or("");
+            let title = if skill.is_empty() {
+                "Skill".to_string()
+            } else {
+                format!("Skill: {}", skill)
+            };
+            ToolInfo::new(title, ToolKind::Other)
+        }
+
         "NotebookRead" | "NotebookEdit" => {
             let path = input
                 .get("notebook_path")
@@ -815,5 +835,41 @@ mod tests {
             "clean_path long path too slow: {}ns per iteration",
             per_iter_ns
         );
+    }
+
+    #[test]
+    fn test_extract_slash_command_tool_info() {
+        let input = json!({"command": "commit", "args": "-m 'fix bug'"});
+        let info = extract_tool_info("SlashCommand", &input, None);
+
+        assert_eq!(info.kind, ToolKind::Other);
+        assert!(info.title.contains("/commit"));
+    }
+
+    #[test]
+    fn test_extract_slash_command_tool_info_empty() {
+        let input = json!({});
+        let info = extract_tool_info("SlashCommand", &input, None);
+
+        assert_eq!(info.kind, ToolKind::Other);
+        assert!(info.title.contains("Slash command"));
+    }
+
+    #[test]
+    fn test_extract_skill_tool_info() {
+        let input = json!({"skill": "pdf", "args": "document.pdf"});
+        let info = extract_tool_info("Skill", &input, None);
+
+        assert_eq!(info.kind, ToolKind::Other);
+        assert!(info.title.contains("pdf"));
+    }
+
+    #[test]
+    fn test_extract_skill_tool_info_empty() {
+        let input = json!({});
+        let info = extract_tool_info("Skill", &input, None);
+
+        assert_eq!(info.kind, ToolKind::Other);
+        assert!(info.title.contains("Skill"));
     }
 }

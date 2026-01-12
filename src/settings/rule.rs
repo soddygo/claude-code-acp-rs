@@ -8,6 +8,7 @@ use globset::{Glob, GlobMatcher};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::mcp::ExternalMcpManager;
 use crate::mcp::tools::bash::contains_shell_operator;
 
 /// Cached regex for parsing permission rules
@@ -179,7 +180,7 @@ impl ParsedRule {
         // Strip ACP prefix if present
         let stripped_name = tool_name.strip_prefix(ACP_TOOL_PREFIX).unwrap_or(tool_name);
 
-        // Check if tool name matches (considering tool groups)
+        // Check if tool name matches (considering tool groups and MCP tools)
         if !self.matches_tool_name(stripped_name) {
             return false;
         }
@@ -206,11 +207,19 @@ impl ParsedRule {
         }
     }
 
-    /// Check if tool name matches (considering tool groups)
+    /// Check if tool name matches (considering tool groups and MCP tools)
     fn matches_tool_name(&self, tool_name: &str) -> bool {
         // Direct match
         if self.tool_name == tool_name {
             return true;
+        }
+
+        // Check if this is an external MCP tool and get its friendly name
+        // This allows rules like "deny: [WebFetch]" to match "mcp__web-fetch__webReader"
+        if let Some(friendly_name) = ExternalMcpManager::get_friendly_tool_name(tool_name) {
+            if self.tool_name == friendly_name {
+                return true;
+            }
         }
 
         // Tool group matching
@@ -219,6 +228,10 @@ impl ParsedRule {
             "Read" => matches!(tool_name, "Read" | "Grep" | "Glob" | "LS"),
             // Edit rule matches Edit, Write
             "Edit" => matches!(tool_name, "Edit" | "Write"),
+            // Task rule matches Task, TaskOutput
+            "Task" => matches!(tool_name, "Task" | "TaskOutput"),
+            // Web rule matches WebSearch, WebFetch
+            "Web" => matches!(tool_name, "WebSearch" | "WebFetch"),
             _ => false,
         }
     }
@@ -319,6 +332,33 @@ fn extract_tool_argument(tool_name: &str, input: &serde_json::Value) -> Option<S
             .or_else(|| input.get("pattern"))
             .and_then(|v| v.as_str())
             .map(String::from),
+        // Task tool: extract subagent_type for permission control
+        "Task" => input
+            .get("subagent_type")
+            .or_else(|| input.get("description"))
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        // TaskOutput tool: extract task_id for permission control
+        "TaskOutput" => input
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        // TodoWrite tool: extract todos count for permission control
+        "TodoWrite" => input
+            .get("todos")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.len().to_string())
+            .or_else(|| Some("0".to_string())),
+        // SlashCommand tool: extract command for permission control
+        "SlashCommand" => input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        // Skill tool: extract skill for permission control
+        "Skill" => input
+            .get("skill")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         _ => None,
     }
 }
@@ -326,8 +366,16 @@ fn extract_tool_argument(tool_name: &str, input: &serde_json::Value) -> Option<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::{manager::Settings, permission_checker::PermissionChecker};
     use serde_json::json;
     use std::path::PathBuf;
+
+    fn settings_with_permissions(permissions: PermissionSettings) -> Settings {
+        Settings {
+            permissions: Some(permissions),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn test_parse_simple_rule() {
@@ -448,5 +496,115 @@ mod tests {
         let ask = PermissionCheckResult::ask();
         assert_eq!(ask.decision, PermissionDecision::Ask);
         assert!(ask.rule.is_none());
+    }
+
+    #[test]
+    fn test_mcp_tool_web_fetch_matching() {
+        // Test that "WebFetch" rule matches "mcp__web-fetch__webReader"
+        let rule = ParsedRule::parse("WebFetch");
+        let cwd = PathBuf::from("/tmp");
+
+        assert!(rule.matches("mcp__web-fetch__webReader", &json!({}), &cwd));
+        assert!(rule.matches("mcp__web-reader__webReader", &json!({}), &cwd));
+    }
+
+    #[test]
+    fn test_mcp_tool_web_search_matching() {
+        // Test that "WebSearch" rule matches "mcp__web-search-prime__webSearchPrime"
+        let rule = ParsedRule::parse("WebSearch");
+        let cwd = PathBuf::from("/tmp");
+
+        assert!(rule.matches("mcp__web-search-prime__webSearchPrime", &json!({}), &cwd));
+    }
+
+    #[test]
+    fn test_mcp_tool_does_not_match_unrelated_tools() {
+        // Test that "WebFetch" rule does NOT match Read or other built-in tools
+        let rule = ParsedRule::parse("WebFetch");
+        let cwd = PathBuf::from("/tmp");
+
+        assert!(!rule.matches("Read", &json!({}), &cwd));
+        assert!(!rule.matches("Bash", &json!({}), &cwd));
+        assert!(!rule.matches("Write", &json!({}), &cwd));
+    }
+
+    #[test]
+    fn test_deny_web_fetch_blocks_mcp_tool() {
+        // Test that deny: ["WebFetch"] blocks the MCP tool
+        let permissions = PermissionSettings {
+            deny: Some(vec!["WebFetch".to_string()]),
+            ..Default::default()
+        };
+        let checker = PermissionChecker::new(settings_with_permissions(permissions), "/tmp");
+
+        let result = checker.check_permission("mcp__web-fetch__webReader", &json!({}));
+        assert_eq!(result.decision, PermissionDecision::Deny);
+        assert_eq!(result.rule, Some("WebFetch".to_string()));
+    }
+
+    #[test]
+    fn test_deny_web_search_blocks_mcp_tool() {
+        // Test that deny: ["WebSearch"] blocks the MCP tool
+        let permissions = PermissionSettings {
+            deny: Some(vec!["WebSearch".to_string()]),
+            ..Default::default()
+        };
+        let checker = PermissionChecker::new(settings_with_permissions(permissions), "/tmp");
+
+        let result = checker.check_permission("mcp__web-search-prime__webSearchPrime", &json!({}));
+        assert_eq!(result.decision, PermissionDecision::Deny);
+        assert_eq!(result.rule, Some("WebSearch".to_string()));
+    }
+
+    #[test]
+    fn test_allow_web_fetch_allows_mcp_tool() {
+        // Test that allow: ["WebFetch"] allows the MCP tool
+        let permissions = PermissionSettings {
+            allow: Some(vec!["WebFetch".to_string()]),
+            ..Default::default()
+        };
+        let checker = PermissionChecker::new(settings_with_permissions(permissions), "/tmp");
+
+        let result = checker.check_permission("mcp__web-fetch__webReader", &json!({}));
+        assert_eq!(result.decision, PermissionDecision::Allow);
+        assert_eq!(result.rule, Some("WebFetch".to_string()));
+    }
+
+    #[test]
+    fn test_deny_web_fetch_blocks_builtin_tool() {
+        // Test that deny: ["WebFetch"] also blocks the built-in WebFetch tool
+        let permissions = PermissionSettings {
+            deny: Some(vec!["WebFetch".to_string()]),
+            ..Default::default()
+        };
+        let checker = PermissionChecker::new(settings_with_permissions(permissions), "/tmp");
+
+        // Built-in tools use the "mcp__acp__" prefix
+        let result = checker.check_permission("mcp__acp__WebFetch", &json!({}));
+        assert_eq!(result.decision, PermissionDecision::Deny);
+        assert_eq!(result.rule, Some("WebFetch".to_string()));
+
+        // Also works without prefix (direct match)
+        let result = checker.check_permission("WebFetch", &json!({}));
+        assert_eq!(result.decision, PermissionDecision::Deny);
+    }
+
+    #[test]
+    fn test_deny_web_search_blocks_builtin_tool() {
+        // Test that deny: ["WebSearch"] also blocks the built-in WebSearch tool
+        let permissions = PermissionSettings {
+            deny: Some(vec!["WebSearch".to_string()]),
+            ..Default::default()
+        };
+        let checker = PermissionChecker::new(settings_with_permissions(permissions), "/tmp");
+
+        // Built-in tools use the "mcp__acp__" prefix
+        let result = checker.check_permission("mcp__acp__WebSearch", &json!({}));
+        assert_eq!(result.decision, PermissionDecision::Deny);
+        assert_eq!(result.rule, Some("WebSearch".to_string()));
+
+        // Also works without prefix (direct match)
+        let result = checker.check_permission("WebSearch", &json!({}));
+        assert_eq!(result.decision, PermissionDecision::Deny);
     }
 }

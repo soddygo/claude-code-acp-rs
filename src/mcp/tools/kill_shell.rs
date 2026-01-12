@@ -117,7 +117,9 @@ impl KillShellTool {
         };
 
         // Get the terminal
-        let Some(terminal) = manager.get_mut(shell_id) else {
+        // Use get() because BackgroundTerminal contains ChildHandle
+        // We only need a shared reference to clone the ChildHandle
+        let Some(terminal) = manager.get(shell_id) else {
             return ToolResult::error(format!("Unknown shell ID: {}", shell_id));
         };
 
@@ -128,15 +130,20 @@ impl KillShellTool {
                 output_buffer,
                 ..
             } => {
-                // Try to kill the process
-                let mut child_guard = child.lock().await;
-                match child_guard.kill().await {
-                    Ok(()) => {
-                        // Get final output before transitioning
-                        let final_output = output_buffer.lock().await.clone();
-                        drop(child_guard);
-                        drop(terminal);
+                // Clone ChildHandle to hold it across await points
+                let mut child_handle = child.clone();
+                let output_buffer_clone = output_buffer.clone();
+                drop(terminal); // Release DashMap read lock before await
 
+                // Clone output and immediately release lock
+                let final_output = {
+                    let buffer_guard = output_buffer_clone.lock().await;
+                    buffer_guard.clone()
+                }; // Lock released here
+
+                // Kill the process (ChildHandle::kill() handles locking internally)
+                match child_handle.kill().await {
+                    Ok(()) => {
                         // Update terminal to finished state
                         manager
                             .finish_terminal(shell_id, TerminalExitStatus::Killed)

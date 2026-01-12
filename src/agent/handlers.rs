@@ -129,7 +129,7 @@ pub async fn handle_new_session(
 
     // Store external MCP servers for later connection
     if !request.mcp_servers.is_empty() {
-        session.set_external_mcp_servers(request.mcp_servers).await;
+        session.set_external_mcp_servers(request.mcp_servers);
     }
 
     // Build available modes

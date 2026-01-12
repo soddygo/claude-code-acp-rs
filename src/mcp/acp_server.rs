@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -20,7 +21,7 @@ use sacp::schema::{
     ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use serde_json::Value;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::instrument;
 
 use super::registry::{ToolContext, ToolResult};
@@ -44,18 +45,19 @@ pub struct AcpMcpServer {
     mcp_server: Arc<McpServer>,
     /// Tool definitions for SDK
     tools: HashMap<String, SdkMcpTool>,
-    /// Session ID
-    session_id: Arc<RwLock<Option<String>>>,
-    /// ACP connection for sending notifications
-    connection_cx: Arc<RwLock<Option<JrConnectionCx<AgentToClient>>>>,
-    /// Terminal client
-    terminal_client: Arc<RwLock<Option<Arc<TerminalClient>>>>,
-    /// Background process manager
-    background_processes: Arc<RwLock<Option<Arc<BackgroundProcessManager>>>>,
-    /// Working directory
+    /// Session ID (set once at initialization)
+    session_id: OnceLock<String>,
+    /// ACP connection for sending notifications (set once at initialization)
+    connection_cx: OnceLock<JrConnectionCx<AgentToClient>>,
+    /// Terminal client (set once at initialization)
+    terminal_client: OnceLock<Arc<TerminalClient>>,
+    /// Background process manager (set once at initialization)
+    background_processes: OnceLock<Arc<BackgroundProcessManager>>,
+    /// Working directory (can be updated)
     cwd: Arc<RwLock<std::path::PathBuf>>,
     /// Cancel callback - called when MCP cancellation notification is received
-    cancel_callback: Arc<RwLock<Option<Box<dyn Fn() + Send + Sync>>>>,
+    /// Uses Mutex (not RwLock) because writes are rare and we need try_lock for deadlock safety
+    cancel_callback: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
 }
 
 impl std::fmt::Debug for AcpMcpServer {
@@ -78,37 +80,41 @@ impl AcpMcpServer {
             version: version.into(),
             mcp_server,
             tools,
-            session_id: Arc::new(RwLock::new(None)),
-            connection_cx: Arc::new(RwLock::new(None)),
-            terminal_client: Arc::new(RwLock::new(None)),
-            background_processes: Arc::new(RwLock::new(None)),
+            session_id: OnceLock::new(),
+            connection_cx: OnceLock::new(),
+            terminal_client: OnceLock::new(),
+            background_processes: OnceLock::new(),
             cwd: Arc::new(RwLock::new(std::path::PathBuf::from("/tmp"))),
-            cancel_callback: Arc::new(RwLock::new(None)),
+            cancel_callback: Arc::new(Mutex::new(None)),
         }
     }
 
     /// Set the session ID
-    pub async fn set_session_id(&self, session_id: impl Into<String>) {
-        let mut guard = self.session_id.write().await;
-        *guard = Some(session_id.into());
+    pub fn set_session_id(&self, session_id: impl Into<String>) {
+        self.session_id
+            .set(session_id.into())
+            .expect("session_id already set");
     }
 
     /// Set the ACP connection
-    pub async fn set_connection(&self, cx: JrConnectionCx<AgentToClient>) {
-        let mut guard = self.connection_cx.write().await;
-        *guard = Some(cx);
+    pub fn set_connection(&self, cx: JrConnectionCx<AgentToClient>) {
+        self.connection_cx
+            .set(cx)
+            .expect("connection_cx already set");
     }
 
     /// Set the terminal client
-    pub async fn set_terminal_client(&self, client: Arc<TerminalClient>) {
-        let mut guard = self.terminal_client.write().await;
-        *guard = Some(client);
+    pub fn set_terminal_client(&self, client: Arc<TerminalClient>) {
+        self.terminal_client
+            .set(client)
+            .expect("terminal_client already set");
     }
 
     /// Set the background process manager
-    pub async fn set_background_processes(&self, manager: Arc<BackgroundProcessManager>) {
-        let mut guard = self.background_processes.write().await;
-        *guard = Some(manager);
+    pub fn set_background_processes(&self, manager: Arc<BackgroundProcessManager>) {
+        self.background_processes
+            .set(manager)
+            .expect("background_processes already set");
     }
 
     /// Set the working directory
@@ -125,7 +131,7 @@ impl AcpMcpServer {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        let mut guard = self.cancel_callback.write().await;
+        let mut guard = self.cancel_callback.lock().await;
         *guard = Some(Box::new(callback));
     }
 
@@ -207,14 +213,15 @@ impl AcpMcpServer {
         status: ToolCallStatus,
         title: Option<&str>,
     ) -> Result<(), String> {
-        let connection_cx = self.connection_cx.read().await;
-        let session_id = self.session_id.read().await;
+        // OnceLock provides lock-free access after initialization
+        let session_id = self.session_id.get();
+        let connection_cx = self.connection_cx.get();
 
-        let Some(cx) = connection_cx.as_ref() else {
+        let Some(cx) = connection_cx else {
             return Err("No connection context available".to_string());
         };
 
-        let Some(session_id) = session_id.as_ref() else {
+        let Some(session_id) = session_id else {
             return Err("No session ID available".to_string());
         };
 
@@ -362,19 +369,20 @@ impl AcpMcpServer {
 
     /// Create a tool context for tool execution
     async fn create_tool_context(&self, tool_use_id: Option<&str>) -> ToolContext {
-        let session_id = self.session_id.read().await;
+        // OnceLock provides lock-free access after initialization
+        let session_id = self.session_id.get().map(|s| s.as_str()).unwrap_or("unknown");
         let cwd = self.cwd.read().await;
-        let terminal_client = self.terminal_client.read().await;
-        let background_processes = self.background_processes.read().await;
-        let connection_cx = self.connection_cx.read().await;
+        let terminal_client = self.terminal_client.get();
+        let background_processes = self.background_processes.get();
+        let connection_cx = self.connection_cx.get();
 
-        let mut context = ToolContext::new(session_id.as_deref().unwrap_or("unknown"), cwd.clone());
+        let mut context = ToolContext::new(session_id.to_string(), cwd.clone());
 
-        if let Some(client) = terminal_client.as_ref() {
+        if let Some(client) = terminal_client {
             context = context.with_terminal_client(client.clone());
         }
 
-        if let Some(manager) = background_processes.as_ref() {
+        if let Some(manager) = background_processes {
             context = context.with_background_processes(manager.clone());
         }
 
@@ -382,7 +390,7 @@ impl AcpMcpServer {
             context = context.with_tool_use_id(id);
         }
 
-        if let Some(cx) = connection_cx.as_ref() {
+        if let Some(cx) = connection_cx {
             context = context.with_connection_cx(cx.clone());
         }
 
@@ -467,15 +475,16 @@ impl AcpMcpServer {
             #[cfg(feature = "verbose-debug")]
             tracing::debug!("Acquiring locks for completion notification");
 
-            let connection_cx = self.connection_cx.read().await;
-            let session_id_guard = self.session_id.read().await;
+            // OnceLock provides lock-free access after initialization
+            let session_id = self.session_id.get();
+            let connection_cx = self.connection_cx.get();
 
             #[cfg(feature = "verbose-debug")]
             tracing::debug!("Locks acquired, checking if we have all required data");
 
             if let (Some(cx), Some(session_id), Some(tool_use_id)) = (
-                connection_cx.as_ref(),
-                session_id_guard.as_ref(),
+                connection_cx,
+                session_id,
                 tool_use_id,
             ) {
                 let status = if result.is_error {
@@ -583,8 +592,10 @@ impl AcpMcpServer {
         context: &ToolContext,
     ) -> Result<ToolResult, String> {
         let bash_start = Instant::now();
-        let connection_cx = self.connection_cx.read().await;
-        let session_id_guard = self.session_id.read().await;
+
+        // OnceLock provides lock-free access after initialization
+        let session_id = self.session_id.get();
+        let connection_cx = self.connection_cx.get();
 
         // Extract command parameters
         let command = arguments
@@ -626,8 +637,8 @@ impl AcpMcpServer {
         // IMPORTANT: Use ToolCall (not ToolCallUpdate) notification because Zed
         // only creates terminals when terminal_info is in a ToolCall notification.
         if let (Some(cx), Some(session_id), Some(tool_use_id)) = (
-            connection_cx.as_ref(),
-            session_id_guard.as_ref(),
+            connection_cx,
+            session_id,
             tool_use_id,
         ) {
             // Build meta with terminal_info and optional description for future use
@@ -656,11 +667,9 @@ impl AcpMcpServer {
         }
 
         // Drop locks before executing command
-        let cx_clone = connection_cx.as_ref().cloned();
-        let session_id_clone = session_id_guard.clone();
+        let cx_clone = connection_cx.cloned();
+        let session_id_clone = session_id.cloned();
         let tool_use_id_clone = tool_use_id.map(String::from);
-        drop(connection_cx);
-        drop(session_id_guard);
 
         // Execute command with streaming
         let result = self
@@ -1088,14 +1097,23 @@ impl SdkMcpServer for AcpMcpServer {
                 );
 
                 // Call the cancel callback to interrupt Claude CLI
-                let callback = self.cancel_callback.read().await;
-                if let Some(ref cb) = *callback {
-                    tracing::info!("Invoking cancel callback to interrupt Claude CLI");
-                    cb();
-                } else {
-                    tracing::warn!(
-                        "No cancel callback registered, cancellation may not take effect"
-                    );
+                // Use try_lock to avoid potential deadlock if callback is locked
+                match self.cancel_callback.try_lock() {
+                    Ok(callback) => {
+                        if let Some(ref cb) = *callback {
+                            tracing::info!("Invoking cancel callback to interrupt Claude CLI");
+                            cb();
+                        } else {
+                            tracing::warn!(
+                                "No cancel callback registered, cancellation may not take effect"
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "Cancel callback is busy, cannot invoke cancellation safely"
+                        );
+                    }
                 }
 
                 Ok(serde_json::json!({}))
@@ -1288,7 +1306,7 @@ mod tests {
 
         // Set a valid cwd for the test
         server.set_cwd(std::env::temp_dir()).await;
-        server.set_session_id("test-session").await;
+        server.set_session_id("test-session");
 
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -1337,7 +1355,7 @@ mod tests {
         // Test that tool_use_id is extracted from _meta
         let server = AcpMcpServer::new("test-server", "1.0.0");
         server.set_cwd(std::env::temp_dir()).await;
-        server.set_session_id("test-session").await;
+        server.set_session_id("test-session");
 
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -1394,7 +1412,7 @@ mod tests {
     async fn test_handle_message_read_tool() {
         let server = AcpMcpServer::new("test-server", "1.0.0");
         server.set_cwd(std::env::temp_dir()).await;
-        server.set_session_id("test-session").await;
+        server.set_session_id("test-session");
 
         // Create a test file
         let test_file = std::env::temp_dir().join("test_read_tool.txt");
@@ -1465,7 +1483,7 @@ mod tests {
     async fn test_execute_bash_without_terminal_client() {
         let server = AcpMcpServer::new("test-server", "1.0.0");
         server.set_cwd(std::env::temp_dir()).await;
-        server.set_session_id("test-session").await;
+        server.set_session_id("test-session");
 
         // Execute without terminal client (terminal_client is None by default)
         let result = server
@@ -1495,7 +1513,7 @@ mod tests {
         // Use the project's src directory for the glob test
         let cwd = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         server.set_cwd(&cwd).await;
-        server.set_session_id("test-session").await;
+        server.set_session_id("test-session");
 
         let result = server
             .execute_tool(
@@ -1524,7 +1542,7 @@ mod tests {
 
         let cwd = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         server.set_cwd(&cwd).await;
-        server.set_session_id("test-session").await;
+        server.set_session_id("test-session");
 
         let result = server
             .execute_tool(
@@ -1556,7 +1574,7 @@ mod tests {
         // Test that Read tool properly reports errors when file doesn't exist
         let server = AcpMcpServer::new("test-server", "1.0.0");
         server.set_cwd(std::env::temp_dir()).await;
-        server.set_session_id("test-session").await;
+        server.set_session_id("test-session");
 
         // Try to read a non-existent file
         let result = server
@@ -1632,7 +1650,7 @@ mod tests {
         let server = AcpMcpServer::new("test-server", "1.0.0");
         let cwd = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         server.set_cwd(&cwd).await;
-        server.set_session_id("test-session").await;
+        server.set_session_id("test-session");
 
         // Use an invalid glob pattern (unclosed bracket)
         let result = server
@@ -1657,7 +1675,7 @@ mod tests {
         // Test that Bash tool properly reports errors for invalid commands
         let server = AcpMcpServer::new("test-server", "1.0.0");
         server.set_cwd(std::env::temp_dir()).await;
-        server.set_session_id("test-session").await;
+        server.set_session_id("test-session");
 
         let result = server
             .execute_tool(
@@ -1675,5 +1693,126 @@ mod tests {
             tool_result.is_error,
             "Non-existent command should be marked as error"
         );
+    }
+
+    // ============================================================
+    // Concurrency tests - verify deadlock fixes
+    // ============================================================
+
+    // Note: test_concurrent_set_session_id_and_execute was removed because
+    // OnceLock does not allow multiple sets. The test_lock_order_consistency test
+    // below verifies that lock ordering is consistent.
+
+    #[tokio::test]
+    async fn test_lock_order_consistency() {
+        // Test that lock acquisition order is consistent across different code paths
+        let server = std::sync::Arc::new(AcpMcpServer::new("test-server", "1.0.0"));
+        let cwd = std::env::temp_dir();
+        server.set_cwd(&cwd).await;
+        server.set_session_id("test-session");
+
+        // Create a barrier to synchronize tasks
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+        let mut handles = vec![];
+
+        // Task 1: Execute Read tool (uses create_tool_context)
+        let server1 = server.clone();
+        let barrier1 = barrier.clone();
+        let handle1 = tokio::spawn(async move {
+            barrier1.wait().await;
+            let _ = server1
+                .execute_tool(
+                    "Read",
+                    serde_json::json!({"file_path": "/tmp/test.txt"}),
+                    Some("tool-1"),
+                )
+                .await;
+        });
+
+        // Task 2: Execute Bash tool (uses execute_bash_tool)
+        let server2 = server.clone();
+        let barrier2 = barrier.clone();
+        let handle2 = tokio::spawn(async move {
+            barrier2.wait().await;
+            let _ = server2
+                .execute_tool(
+                    "Bash",
+                    serde_json::json!({"command": "echo test"}),
+                    Some("tool-2"),
+                )
+                .await;
+        });
+
+        // Task 3: Another Read tool
+        let server3 = server.clone();
+        let barrier3 = barrier.clone();
+        let handle3 = tokio::spawn(async move {
+            barrier3.wait().await;
+            let _ = server3
+                .execute_tool(
+                    "Read",
+                    serde_json::json!({"file_path": "/tmp/test.txt"}),
+                    Some("tool-3"),
+                )
+                .await;
+        });
+
+        handles.push(handle1);
+        handles.push(handle2);
+        handles.push(handle3);
+
+        // Wait for all tasks with a timeout
+        let timeout_duration = std::time::Duration::from_secs(10);
+        let start = std::time::Instant::now();
+
+        for handle in handles {
+            tokio::select! {
+                _ = tokio::time::sleep(timeout_duration) => {
+                    panic!("Test timed out - likely deadlock detected!");
+                }
+                result = handle => {
+                    result.unwrap();
+                }
+            }
+        }
+
+        let elapsed = start.elapsed();
+        println!(
+            "All concurrent tasks completed in {:?}",
+            elapsed
+        );
+
+        // Should complete well within timeout
+        assert!(elapsed < timeout_duration, "Possible deadlock detected");
+    }
+
+    #[tokio::test]
+    async fn test_cancel_callback_try_lock() {
+        // Test that cancel_callback uses try_lock and doesn't cause deadlock
+        let server = AcpMcpServer::new("test-server", "1.0.0");
+
+        // Set a cancel callback
+        let callback_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let callback_flag = callback_called.clone();
+
+        server
+            .set_cancel_callback(move || {
+                callback_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+            .await;
+
+        // Simulate MCP cancellation notification
+        let cancellation_message = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {
+                "requestId": "test-request-123"
+            }
+        });
+
+        // This should not deadlock even if callback is locked elsewhere
+        let result = server.handle_message(cancellation_message).await;
+        assert!(result.is_ok(), "Cancellation handling should succeed");
+        assert!(callback_called.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

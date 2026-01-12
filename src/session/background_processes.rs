@@ -3,11 +3,113 @@
 //! Manages background terminal processes that are started with `run_in_background=true`.
 //! Supports retrieving incremental output and killing running processes.
 
+use std::io;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dashmap::DashMap;
 use tokio::process::Child;
 use tokio::sync::Mutex;
+
+use crate::session::wrapped_child::WrappedChild;
+
+/// Child process handle that can be either wrapped or unwrapped
+///
+/// This enum allows us to support both:
+/// - Legacy tokio::process::Child (no process group)
+/// - WrappedChild with process group support (process-wrap)
+///
+/// Note: Clone implementation creates a new handle that shares the same child
+/// but does NOT clone stdout/stderr (those are taken by the first user).
+#[derive(Debug)]
+pub enum ChildHandle {
+    /// Unwrapped child (legacy, no process group support)
+    Unwrapped {
+        /// The child process
+        child: Arc<Mutex<Child>>,
+    },
+    /// Wrapped child with process group support (via process-wrap)
+    Wrapped {
+        /// The wrapped child
+        child: Arc<Mutex<WrappedChild>>,
+    },
+}
+
+impl Clone for ChildHandle {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Unwrapped { child } => Self::Unwrapped {
+                child: Arc::clone(child),
+            },
+            Self::Wrapped { child } => Self::Wrapped {
+                child: Arc::clone(child),
+            },
+        }
+    }
+}
+
+impl ChildHandle {
+    /// Get stdout reference (only available if not yet taken)
+    /// Note: This always returns None after cloning because stdout/stderr are not cloned
+    pub fn stdout(&self) -> Option<&tokio::process::ChildStdout> {
+        None // Stdout/stderr are not available after cloning
+    }
+
+    /// Get stderr reference (only available if not yet taken)
+    /// Note: This always returns None after cloning because stdout/stderr are not cloned
+    pub fn stderr(&self) -> Option<&tokio::process::ChildStderr> {
+        None // Stdout/stderr are not available after cloning
+    }
+
+    /// Kill the process (and process group if wrapped)
+    pub async fn kill(&mut self) -> io::Result<()> {
+        match self {
+            Self::Unwrapped { child } => {
+                let mut guard = child.lock().await;
+                guard.kill().await
+            }
+            Self::Wrapped { child } => {
+                let mut guard = child.lock().await;
+                guard.kill().await
+            }
+        }
+    }
+
+    /// Wait for the process to exit
+    pub async fn wait(&mut self) -> io::Result<std::process::ExitStatus> {
+        match self {
+            Self::Unwrapped { child } => {
+                let mut guard = child.lock().await;
+                guard.wait().await
+            }
+            Self::Wrapped { child } => {
+                let mut guard = child.lock().await;
+                guard.wait().await
+            }
+        }
+    }
+
+    /// Try to wait without blocking
+    pub fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+        // For tokio::sync::Mutex, we need to use try_lock
+        match self {
+            Self::Unwrapped { child } => {
+                if let Ok(mut guard) = child.try_lock() {
+                    guard.try_wait()
+                } else {
+                    Ok(None)
+                }
+            }
+            Self::Wrapped { child } => {
+                if let Ok(mut guard) = child.try_lock() {
+                    guard.try_wait()
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+}
 
 /// Terminal exit status
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,12 +141,13 @@ impl TerminalExitStatus {
 pub enum BackgroundTerminal {
     /// Terminal is still running
     Running {
-        /// The child process
-        child: Arc<Mutex<Child>>,
+        /// The child process handle (wrapped or unwrapped)
+        child: ChildHandle,
         /// Accumulated output buffer
         output_buffer: Arc<Mutex<String>>,
         /// Last read offset for incremental output
-        last_read_offset: Arc<Mutex<usize>>,
+        /// Using AtomicUsize for lock-free atomic operations
+        last_read_offset: Arc<AtomicUsize>,
     },
     /// Terminal has finished
     Finished {
@@ -56,12 +159,24 @@ pub enum BackgroundTerminal {
 }
 
 impl BackgroundTerminal {
-    /// Create a new running terminal
-    pub fn new_running(child: Child) -> Self {
+    /// Create a new running terminal with a child handle
+    pub fn new_running(child: ChildHandle) -> Self {
         Self::Running {
-            child: Arc::new(Mutex::new(child)),
+            child,
             output_buffer: Arc::new(Mutex::new(String::new())),
-            last_read_offset: Arc::new(Mutex::new(0)),
+            last_read_offset: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Create a new running terminal from a legacy Child (unwrapped)
+    /// Note: stdout/stderr should be taken before creating the handle
+    pub fn new_running_unwrapped(child: Child) -> Self {
+        Self::Running {
+            child: ChildHandle::Unwrapped {
+                child: Arc::new(Mutex::new(child)),
+            },
+            output_buffer: Arc::new(Mutex::new(String::new())),
+            last_read_offset: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -86,10 +201,17 @@ impl BackgroundTerminal {
                 last_read_offset,
                 ..
             } => {
+                // Use atomic load to get current offset (lock-free)
+                let current_offset = last_read_offset.load(Ordering::Acquire);
+
                 let buffer = output_buffer.lock().await;
-                let mut offset = last_read_offset.lock().await;
-                let new_output = buffer[*offset..].to_string();
-                *offset = buffer.len();
+                let new_output = buffer[current_offset..].to_string();
+                let new_len = buffer.len();
+                drop(buffer);
+
+                // Update offset using atomic store (lock-free)
+                last_read_offset.store(new_len, Ordering::Release);
+
                 new_output
             }
             Self::Finished { final_output, .. } => final_output.clone(),
@@ -161,14 +283,6 @@ impl BackgroundProcessManager {
         shell_id: &str,
     ) -> Option<dashmap::mapref::one::Ref<'_, String, BackgroundTerminal>> {
         self.terminals.get(shell_id)
-    }
-
-    /// Get mutable terminal by ID
-    pub fn get_mut(
-        &self,
-        shell_id: &str,
-    ) -> Option<dashmap::mapref::one::RefMut<'_, String, BackgroundTerminal>> {
-        self.terminals.get_mut(shell_id)
     }
 
     /// Remove terminal by ID

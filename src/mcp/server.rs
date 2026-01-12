@@ -9,9 +9,10 @@ use std::sync::Arc;
 use crate::mcp::external::{ExternalMcpError, ExternalMcpManager};
 use crate::mcp::registry::{ToolContext, ToolRegistry, ToolResult, ToolSchema};
 use crate::mcp::tools::{
-    BashOutputTool, BashTool, EditTool, ExitPlanModeTool, GlobTool, GrepTool, KillShellTool,
-    LsTool, NotebookEditTool, NotebookReadTool, ReadTool, TaskOutputTool, TaskTool, TodoWriteTool,
-    Tool, WebFetchTool, WebSearchTool, WriteTool,
+    AskUserQuestionTool, BashOutputTool, BashTool, EditTool, ExitPlanModeTool, GlobTool,
+    GrepTool, KillShellTool, LsTool, NotebookEditTool, NotebookReadTool, ReadTool,
+    SkillTool, SlashCommandTool, TaskOutputTool, TaskTool, TodoWriteTool, Tool,
+    WebFetchTool, WebSearchTool, WriteTool,
 };
 use crate::settings::McpServerConfig;
 
@@ -97,6 +98,9 @@ impl McpServer {
         self.registry.register(NotebookEditTool::new());
         self.registry.register(TaskTool::new());
         self.registry.register(TaskOutputTool::new());
+        self.registry.register(AskUserQuestionTool::new());
+        self.registry.register(SlashCommandTool::new());
+        self.registry.register(SkillTool::new());
     }
 
     /// Get the server name
@@ -147,7 +151,7 @@ impl McpServer {
     /// Get all tool schemas including external MCP tools (async)
     pub async fn all_tool_schemas(&self) -> Vec<ToolSchema> {
         let mut schemas = self.registry.schemas();
-        schemas.extend(self.external.all_tools().await);
+        schemas.extend(self.external.all_tools());
         schemas
     }
 
@@ -313,7 +317,7 @@ mod tests {
         assert!(server.has_tool("NotebookEdit"));
         assert!(server.has_tool("Task"));
         assert!(server.has_tool("TaskOutput"));
-        assert_eq!(server.tool_count(), 17);
+        assert_eq!(server.tool_count(), 20);
     }
 
     #[test]
@@ -357,7 +361,7 @@ mod tests {
         let server = McpServer::new();
         let schemas = server.tool_schemas();
 
-        assert_eq!(schemas.len(), 17);
+        assert_eq!(schemas.len(), 20);
 
         // Check that each schema has required fields
         for schema in &schemas {

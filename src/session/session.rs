@@ -8,6 +8,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 use tokio::sync::broadcast;
 
@@ -25,7 +26,7 @@ use tracing::instrument;
 use crate::converter::NotificationConverter;
 use crate::hooks::{HookCallbackRegistry, create_post_tool_use_hook, create_pre_tool_use_hook};
 use crate::mcp::AcpMcpServer;
-use crate::settings::PermissionChecker;
+use crate::settings::{PermissionChecker, SettingsManager};
 use crate::terminal::TerminalClient;
 use crate::types::{AgentConfig, AgentError, NewSessionMeta, Result};
 
@@ -78,14 +79,15 @@ pub struct Session {
     hook_callback_registry: Arc<HookCallbackRegistry>,
     /// Permission checker for hooks
     permission_checker: Arc<RwLock<PermissionChecker>>,
-    /// Current model ID for this session
-    current_model: RwLock<Option<String>>,
+    /// Current model ID for this session (set once during initialization)
+    current_model: OnceLock<String>,
     /// ACP MCP server for tool execution with notifications
     acp_mcp_server: Arc<AcpMcpServer>,
     /// Background process manager
     background_processes: Arc<BackgroundProcessManager>,
     /// External MCP servers to connect (from client request)
-    external_mcp_servers: RwLock<Vec<McpServer>>,
+    /// Set once during session initialization via set_external_mcp_servers()
+    external_mcp_servers: OnceLock<Vec<McpServer>>,
     /// Whether external MCP servers have been connected
     external_mcp_connected: AtomicBool,
     /// Cancel signal sender - used to notify when MCP cancellation is received
@@ -128,8 +130,30 @@ impl Session {
         let hook_callback_registry = Arc::new(HookCallbackRegistry::new());
 
         // Create permission checker for hooks
-        let settings = crate::settings::Settings::default();
-        let permission_checker = Arc::new(RwLock::new(PermissionChecker::new(settings, &cwd)));
+        // Load settings from ~/.claude/settings.json, .claude/settings.json, etc.
+        let settings_manager = SettingsManager::new(&cwd)
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to load settings manager from cwd: {}. Using default settings.", e);
+                // Fallback: try to load settings from home directory
+                match dirs::home_dir() {
+                    Some(home) => {
+                        tracing::info!("Attempting to load settings from home directory");
+                        SettingsManager::new(&home).unwrap_or_else(|e2| {
+                            tracing::error!("Failed to load settings from home directory: {}. Using minimal default settings.", e2);
+                            // Last resort: create a manager with minimal settings
+                            SettingsManager::new_with_settings(crate::settings::Settings::default(), "/")
+                        })
+                    }
+                    None => {
+                        tracing::error!("No home directory found. Using minimal default settings.");
+                        SettingsManager::new_with_settings(crate::settings::Settings::default(), "/")
+                    }
+                }
+            });
+        let permission_checker = Arc::new(RwLock::new(PermissionChecker::new(
+            settings_manager.settings().clone(),
+            &cwd,
+        )));
 
         // Create hooks
         let pre_tool_use_hook = create_pre_tool_use_hook(permission_checker.clone());
@@ -217,6 +241,10 @@ impl Session {
         // This disables CLI's built-in tools and enables our MCP tools with mcp__acp__ prefix
         let acp_tools = get_acp_replacement_tools();
         options.use_acp_tools(&acp_tools);
+
+        // Enable streaming to receive incremental content updates
+        // This allows SDK to send StreamEvent messages with content_block_delta
+        options.include_partial_messages = true;
 
         tracing::debug!(
             session_id = %session_id,
@@ -307,10 +335,10 @@ impl Session {
             connected: AtomicBool::new(false),
             hook_callback_registry,
             permission_checker,
-            current_model: RwLock::new(None),
+            current_model: OnceLock::new(),
             acp_mcp_server,
             background_processes,
-            external_mcp_servers: RwLock::new(Vec::new()),
+            external_mcp_servers: OnceLock::new(),
             external_mcp_connected: AtomicBool::new(false),
             cancel_sender: broadcast::channel(1).0,
         })
@@ -321,7 +349,7 @@ impl Session {
     /// # Arguments
     ///
     /// * `servers` - List of MCP servers from the client request
-    pub async fn set_external_mcp_servers(&self, servers: Vec<McpServer>) {
+    pub fn set_external_mcp_servers(&self, servers: Vec<McpServer>) {
         if !servers.is_empty() {
             tracing::info!(
                 session_id = %self.session_id,
@@ -366,7 +394,8 @@ impl Session {
             }
         }
 
-        *self.external_mcp_servers.write().await = servers;
+        // Set the servers (can only be set once)
+        drop(self.external_mcp_servers.set(servers));
     }
 
     /// Connect to external MCP servers
@@ -388,17 +417,23 @@ impl Session {
             return Ok(());
         }
 
-        let servers = self.external_mcp_servers.read().await;
-        if servers.is_empty() {
-            tracing::debug!(
-                session_id = %self.session_id,
-                "No external MCP servers to connect"
-            );
-            self.external_mcp_connected.store(true, Ordering::SeqCst);
-            return Ok(());
-        }
+        // Get servers (no lock needed with OnceLock)
+        let servers = match self.external_mcp_servers.get() {
+            Some(s) => s,
+            None => {
+                tracing::debug!(
+                    session_id = %self.session_id,
+                    "No external MCP servers to connect"
+                );
+                self.external_mcp_connected.store(true, Ordering::SeqCst);
+                return Ok(());
+            }
+        };
 
-        let server_count = servers.len();
+        // Clone server list to avoid holding reference
+        let servers_vec: Vec<_> = servers.iter().cloned().collect();
+
+        let server_count = servers_vec.len();
         let start_time = Instant::now();
 
         tracing::info!(
@@ -412,7 +447,7 @@ impl Session {
         let mut success_count = 0;
         let mut error_count = 0;
 
-        for server in servers.iter() {
+        for server in servers_vec.iter() {
             match server {
                 McpServer::Stdio(s) => {
                     let server_start = Instant::now();
@@ -694,16 +729,17 @@ impl Session {
     ///
     /// Note: Not yet used because sacp SDK does not support SetSessionModel.
     #[allow(dead_code)]
-    pub async fn current_model(&self) -> Option<String> {
-        self.current_model.read().await.clone()
+    pub fn current_model(&self) -> Option<String> {
+        self.current_model.get().cloned()
     }
 
     /// Set the model for this session
     ///
     /// Note: Not yet used because sacp SDK does not support SetSessionModel.
     #[allow(dead_code)]
-    pub async fn set_model(&self, model_id: String) {
-        *self.current_model.write().await = Some(model_id);
+    pub fn set_model(&self, model_id: String) {
+        // Ignore error if model was already set (should not happen in normal use)
+        drop(self.current_model.set(model_id));
     }
 
     /// Get the usage tracker
@@ -755,15 +791,14 @@ impl Session {
         connection_cx: JrConnectionCx<AgentToClient>,
         terminal_client: Option<Arc<TerminalClient>>,
     ) {
-        self.acp_mcp_server.set_session_id(&self.session_id).await;
-        self.acp_mcp_server.set_connection(connection_cx).await;
+        self.acp_mcp_server.set_session_id(&self.session_id);
+        self.acp_mcp_server.set_connection(connection_cx);
         self.acp_mcp_server.set_cwd(self.cwd.clone()).await;
         self.acp_mcp_server
-            .set_background_processes(self.background_processes.clone())
-            .await;
+            .set_background_processes(self.background_processes.clone());
 
         if let Some(client) = terminal_client {
-            self.acp_mcp_server.set_terminal_client(client).await;
+            self.acp_mcp_server.set_terminal_client(client);
         }
 
         // Set up cancel callback to interrupt Claude CLI when MCP cancellation is received

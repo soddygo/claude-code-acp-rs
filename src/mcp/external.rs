@@ -6,18 +6,20 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::RwLock;
 use tracing::{Span, instrument};
 
 use super::registry::{ToolResult, ToolSchema};
 
-/// Default timeout for MCP requests (30 seconds)
-const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default timeout for MCP requests (3 minutes)
+/// WebSearch and WebFetch may need significant time due to network I/O
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Default timeout for MCP initialization (60 seconds, MCP servers may need time to start)
 const DEFAULT_INIT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -723,14 +725,16 @@ impl ExternalMcpServer {
 #[allow(missing_debug_implementations)]
 pub struct ExternalMcpManager {
     /// Connected servers by name
-    servers: RwLock<HashMap<String, ExternalMcpServer>>,
+    /// Using DashMap for lock-free concurrent access to different servers
+    /// Using tokio::sync::Mutex to allow holding lock across .await points
+    servers: DashMap<String, Arc<tokio::sync::Mutex<ExternalMcpServer>>>,
 }
 
 impl ExternalMcpManager {
     /// Create a new external MCP manager
     pub fn new() -> Self {
         Self {
-            servers: RwLock::new(HashMap::new()),
+            servers: DashMap::new(),
         }
     }
 
@@ -799,29 +803,43 @@ impl ExternalMcpManager {
             "MCP server tools available"
         );
 
-        self.servers.write().await.insert(name, server);
+        // Insert server into DashMap (no async needed)
+        self.servers.insert(name, Arc::new(tokio::sync::Mutex::new(server)));
         Ok(())
     }
 
     /// Disconnect from an MCP server
-    pub async fn disconnect(&self, name: &str) {
-        self.servers.write().await.remove(name);
+    pub fn disconnect(&self, name: &str) {
+        self.servers.remove(name);
     }
 
     /// Get all connected server names
-    pub async fn server_names(&self) -> Vec<String> {
-        self.servers.read().await.keys().cloned().collect()
+    pub fn server_names(&self) -> Vec<String> {
+        self.servers.iter().map(|entry| entry.key().clone()).collect()
     }
 
     /// Get all available tools from all servers
     ///
     /// Tool names are prefixed with `mcp__<server>__`
-    pub async fn all_tools(&self) -> Vec<ToolSchema> {
-        let servers = self.servers.read().await;
+    pub fn all_tools(&self) -> Vec<ToolSchema> {
         let mut tools = Vec::new();
 
-        for (server_name, server) in servers.iter() {
-            for tool in server.tools() {
+        for entry in self.servers.iter() {
+            let server_name = entry.key();
+            let server = entry.value();
+            // Try to lock the mutex (non-blocking)
+            let server_guard = match server.try_lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    tracing::warn!(
+                        server_name = %server_name,
+                        "MCP server is busy, skipping for tool listing"
+                    );
+                    continue; // Skip this server if lock is not available
+                }
+            };
+
+            for tool in server_guard.tools() {
                 tools.push(ToolSchema {
                     name: format!("mcp__{}_{}", server_name, tool.name),
                     description: format!("[{}] {}", server_name, tool.description),
@@ -848,8 +866,6 @@ impl ExternalMcpManager {
         full_tool_name: &str,
         arguments: serde_json::Value,
     ) -> Result<ToolResult, ExternalMcpError> {
-        let start_time = Instant::now();
-
         // Parse server name and tool name from `mcp__<server>__<tool>`
         let parts: Vec<&str> = full_tool_name.splitn(3, "__").collect();
         if parts.len() != 3 || parts[0] != "mcp" {
@@ -875,53 +891,62 @@ impl ExternalMcpManager {
             "Routing tool call to external MCP server"
         );
 
-        let mut servers = self.servers.write().await;
-
-        // Check if server exists first and log available servers if not
-        if !servers.contains_key(server_name) {
-            let available: Vec<&str> = servers.keys().map(|s| s.as_str()).collect();
+        // Get the server from DashMap
+        let server_arc = self.servers.get(server_name).ok_or_else(|| {
+            let available: Vec<String> = self.server_names();
             tracing::error!(
                 server_name = %server_name,
                 tool_name = %tool_name,
                 available_servers = ?available,
                 "External MCP server not found"
             );
-            return Err(ExternalMcpError::ServerNotFound(server_name.to_string()));
-        }
+            ExternalMcpError::ServerNotFound(server_name.to_string())
+        })?;
 
-        let server = servers.get_mut(server_name).unwrap();
+        // Clone the Arc to hold it across the await
+        let server = server_arc.clone();
+        drop(server_arc); // Release DashMap reference
 
-        let result = server.call_tool(tool_name, arguments).await;
+        let start_time = Instant::now();
+
+        // Lock the server's mutex and call the tool
+        // tokio::sync::Mutex allows holding lock across .await points
+        let result = {
+            let mut server_guard = server.lock().await;
+            server_guard.call_tool(tool_name, arguments).await?
+        };
 
         let elapsed = start_time.elapsed();
-        match &result {
-            Ok(r) => {
-                tracing::info!(
-                    server_name = %server_name,
-                    tool_name = %tool_name,
-                    elapsed_ms = elapsed.as_millis(),
-                    is_error = r.is_error,
-                    "External MCP tool call completed"
-                );
-            }
-            Err(e) => {
-                tracing::error!(
-                    server_name = %server_name,
-                    tool_name = %tool_name,
-                    elapsed_ms = elapsed.as_millis(),
-                    error = %e,
-                    "External MCP tool call failed"
-                );
-            }
-        }
+        tracing::info!(
+            server_name = %server_name,
+            tool_name = %tool_name,
+            elapsed_ms = elapsed.as_millis(),
+            is_error = result.is_error,
+            "External MCP tool call completed"
+        );
 
-        result
+        Ok(result)
     }
 
     /// Get statistics for all connected servers
-    pub async fn all_stats(&self) -> Vec<McpServerStats> {
-        let servers = self.servers.read().await;
-        servers.values().map(|s| s.stats()).collect()
+    pub fn all_stats(&self) -> Vec<McpServerStats> {
+        self.servers
+            .iter()
+            .filter_map(|entry| {
+                let server = entry.value();
+                // Try to lock the mutex (non-blocking)
+                match server.try_lock() {
+                    Ok(guard) => Some(guard.stats()),
+                    Err(_) => {
+                        tracing::warn!(
+                            server_name = %entry.key(),
+                            "MCP server is busy, skipping for stats"
+                        );
+                        None
+                    }
+                }
+            })
+            .collect()
     }
 
     /// Check if a tool name refers to an external MCP tool
@@ -941,6 +966,40 @@ impl ExternalMcpManager {
 
         // "acp" is reserved for the ACP tool prefix, not external MCP
         parts[1] != "acp"
+    }
+
+    /// Get the friendly name for an external MCP tool
+    ///
+    /// This maps MCP tool names like `mcp__web-fetch__webReader` to friendly names
+    /// like `WebFetch` that can be used in permission settings.
+    ///
+    /// Only supports official Anthropic Claude Code tools:
+    /// - WebFetch (web-fetch/web-reader MCP server)
+    /// - WebSearch (web-search-prime MCP server)
+    ///
+    /// Returns None if the tool is not an external MCP tool or has no known mapping.
+    pub fn get_friendly_tool_name(name: &str) -> Option<String> {
+        if !Self::is_external_tool(name) {
+            return None;
+        }
+
+        let parts: Vec<&str> = name.splitn(3, "__").collect();
+        let server_name = parts.get(1)?;
+        let tool_name = parts.get(2)?;
+
+        // Map known MCP server/tool combinations to friendly names
+        // Only official Anthropic Claude Code tools are supported
+        match (*server_name, *tool_name) {
+            // Web Fetch MCP server
+            ("web-fetch", "webReader") => Some("WebFetch".to_string()),
+            ("web-reader", "webReader") => Some("WebFetch".to_string()),
+
+            // Web Search Prime MCP server
+            ("web-search-prime", "webSearchPrime") => Some("WebSearch".to_string()),
+
+            // Unknown tool - return None
+            _ => None,
+        }
     }
 }
 
@@ -1070,14 +1129,61 @@ mod tests {
     #[tokio::test]
     async fn test_manager_server_names_empty() {
         let manager = ExternalMcpManager::new();
-        let names = manager.server_names().await;
+        let names = manager.server_names();
         assert!(names.is_empty());
     }
 
     #[tokio::test]
     async fn test_manager_all_tools_empty() {
         let manager = ExternalMcpManager::new();
-        let tools = manager.all_tools().await;
+        let tools = manager.all_tools();
         assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn test_get_friendly_tool_name_web_fetch() {
+        assert_eq!(
+            ExternalMcpManager::get_friendly_tool_name("mcp__web-fetch__webReader"),
+            Some("WebFetch".to_string())
+        );
+        assert_eq!(
+            ExternalMcpManager::get_friendly_tool_name("mcp__web-reader__webReader"),
+            Some("WebFetch".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_friendly_tool_name_web_search() {
+        assert_eq!(
+            ExternalMcpManager::get_friendly_tool_name("mcp__web-search-prime__webSearchPrime"),
+            Some("WebSearch".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_friendly_tool_name_non_mcp_tool() {
+        assert_eq!(ExternalMcpManager::get_friendly_tool_name("Read"), None);
+        assert_eq!(ExternalMcpManager::get_friendly_tool_name("Bash"), None);
+        assert_eq!(
+            ExternalMcpManager::get_friendly_tool_name("mcp__acp__Read"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_get_friendly_tool_name_unknown_mcp_tool() {
+        // Unknown MCP tools should return None (only official tools are supported)
+        assert_eq!(
+            ExternalMcpManager::get_friendly_tool_name("mcp__zai-mcp-server__ui_to_artifact"),
+            None
+        );
+        assert_eq!(
+            ExternalMcpManager::get_friendly_tool_name("mcp__context7__query-docs"),
+            None
+        );
+        assert_eq!(
+            ExternalMcpManager::get_friendly_tool_name("mcp__my-server__my_custom_tool"),
+            None
+        );
     }
 }

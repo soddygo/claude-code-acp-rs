@@ -1,5 +1,6 @@
 //! Tool definitions and implementations
 
+mod ask_user_question;
 mod base;
 pub mod bash;
 mod bash_output;
@@ -12,6 +13,8 @@ mod ls;
 mod notebook_edit;
 mod notebook_read;
 mod read;
+mod skill;
+mod slash_command;
 mod task;
 mod task_output;
 mod todo_write;
@@ -19,6 +22,7 @@ mod web_fetch;
 mod web_search;
 mod write;
 
+pub use ask_user_question::AskUserQuestionTool;
 pub use base::Tool;
 pub use bash::{BashTool, contains_shell_operator};
 pub use bash_output::BashOutputTool;
@@ -31,6 +35,8 @@ pub use ls::LsTool;
 pub use notebook_edit::NotebookEditTool;
 pub use notebook_read::NotebookReadTool;
 pub use read::ReadTool;
+pub use skill::SkillTool;
+pub use slash_command::SlashCommandTool;
 pub use task::TaskTool;
 pub use task_output::TaskOutputTool;
 pub use todo_write::{TodoItem, TodoList, TodoStatus, TodoWriteTool};

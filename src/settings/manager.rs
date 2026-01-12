@@ -206,6 +206,21 @@ impl SettingsManager {
         })
     }
 
+    /// Create a new settings manager with provided settings (fallback)
+    ///
+    /// # Arguments
+    ///
+    /// * `settings` - The settings to use
+    /// * `project_dir` - The project working directory
+    pub fn new_with_settings(settings: Settings, project_dir: impl AsRef<Path>) -> Self {
+        let project_dir = project_dir.as_ref().to_path_buf();
+
+        Self {
+            settings,
+            project_dir,
+        }
+    }
+
     /// Load and merge all settings sources
     ///
     /// Priority: Local > Project > User

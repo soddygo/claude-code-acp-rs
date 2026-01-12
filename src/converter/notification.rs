@@ -158,6 +158,23 @@ impl NotificationConverter {
         let event_type = event.event.get("type").and_then(|v| v.as_str());
 
         match event_type {
+            Some("content_block_start") => {
+                // Handle content_block_start - important for tool calls
+                // When streaming is enabled, tool_use blocks arrive via content_block_start
+                if let Some(content_block) = event.event.get("content_block") {
+                    // Check if this is a tool_use block
+                    if let Some(block_type) = content_block.get("type").and_then(|v| v.as_str()) {
+                        if block_type == "tool_use" || block_type == "mcp_tool_use" {
+                            // Parse tool_use from content_block
+                            if let Ok(tool_use) = serde_json::from_value::<ToolUseBlock>(content_block.clone()) {
+                                self.cache_tool_use(&tool_use);
+                                return vec![self.make_tool_call(session_id, &tool_use)];
+                            }
+                        }
+                    }
+                }
+                vec![]
+            }
             Some("content_block_delta") => {
                 if let Some(delta) = event.event.get("delta") {
                     // Text delta
@@ -169,10 +186,6 @@ impl NotificationConverter {
                         return vec![self.make_agent_thought_chunk(session_id, thinking)];
                     }
                 }
-                vec![]
-            }
-            Some("content_block_start") => {
-                // Could be used to signal start of a new block
                 vec![]
             }
             Some("content_block_stop") => {
