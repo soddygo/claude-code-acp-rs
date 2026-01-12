@@ -394,8 +394,10 @@ impl Session {
             }
         }
 
-        // Set the servers (can only be set once)
-        drop(self.external_mcp_servers.set(servers));
+        // Only set if not already set (configure_acp_server may be called multiple times)
+        if self.external_mcp_servers.get().is_none() {
+            drop(self.external_mcp_servers.set(servers));
+        }
     }
 
     /// Connect to external MCP servers
@@ -738,8 +740,10 @@ impl Session {
     /// Note: Not yet used because sacp SDK does not support SetSessionModel.
     #[allow(dead_code)]
     pub fn set_model(&self, model_id: String) {
-        // Ignore error if model was already set (should not happen in normal use)
-        drop(self.current_model.set(model_id));
+        // Only set if not already set (may be called multiple times)
+        if self.current_model.get().is_none() {
+            drop(self.current_model.set(model_id));
+        }
     }
 
     /// Get the usage tracker

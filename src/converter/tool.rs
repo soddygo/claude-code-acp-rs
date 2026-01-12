@@ -183,7 +183,8 @@ pub fn extract_tool_info(name: &str, input: &serde_json::Value, cwd: Option<&Pat
             // Glob patterns don't need ./ prefix for display
             let without_dot_slash = pattern.strip_prefix("./").unwrap_or(pattern);
             let clean_pattern = clean_path(without_dot_slash);
-            let title = format!("Find: {}", truncate_string(&clean_pattern, 40));
+            // Wrap in backticks to prevent markdown rendering of ** as bold
+            let title = format!("Find: `{}`", truncate_string(&clean_pattern, 40));
             ToolInfo::new(title, ToolKind::Search)
         }
 
@@ -652,7 +653,7 @@ mod tests {
         let info = extract_tool_info("Glob", &input, None);
 
         assert_eq!(info.kind, ToolKind::Search);
-        assert_eq!(info.title, "Find: src/**/*.rs");
+        assert_eq!(info.title, "Find: `src/**/*.rs`");
         assert!(!info.title.contains("./"));
     }
 
@@ -663,7 +664,7 @@ mod tests {
         let info = extract_tool_info("Glob", &input, None);
 
         assert_eq!(info.kind, ToolKind::Search);
-        assert_eq!(info.title, "Find: src/**/*.rs");
+        assert_eq!(info.title, "Find: `src/**/*.rs`");
         assert!(!info.title.contains("//"));
     }
 
@@ -675,7 +676,7 @@ mod tests {
 
         assert_eq!(info.kind, ToolKind::Search);
         // .//src becomes /src after stripping ./ and then cleaning //
-        assert_eq!(info.title, "Find: /src/**/*.rs");
+        assert_eq!(info.title, "Find: `/src/**/*.rs`");
     }
 
     #[test]
@@ -697,7 +698,7 @@ mod tests {
         let info = extract_tool_info("Glob", &input, None);
 
         assert_eq!(info.kind, ToolKind::Search);
-        assert_eq!(info.title, "Find: *.rs");
+        assert_eq!(info.title, "Find: `*.rs`");
     }
 
     #[test]
@@ -707,7 +708,7 @@ mod tests {
         let info = extract_tool_info("Glob", &input, None);
 
         assert_eq!(info.kind, ToolKind::Search);
-        assert_eq!(info.title, "Find: src/**/*.rs");
+        assert_eq!(info.title, "Find: `src/**/*.rs`");
     }
 
     #[test]

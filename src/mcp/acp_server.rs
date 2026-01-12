@@ -50,6 +50,11 @@ pub struct AcpMcpServer {
     /// ACP connection for sending notifications (set once at initialization)
     connection_cx: OnceLock<JrConnectionCx<AgentToClient>>,
     /// Terminal client (set once at initialization)
+    ///
+    /// Note: While configure_acp_server is called on every prompt and
+    /// creates a new TerminalClient each time, all instances are functionally
+    /// equivalent (same connection_cx and session_id). OnceLock ensures we
+    /// use only the first instance.
     terminal_client: OnceLock<Arc<TerminalClient>>,
     /// Background process manager (set once at initialization)
     background_processes: OnceLock<Arc<BackgroundProcessManager>>,
@@ -89,32 +94,36 @@ impl AcpMcpServer {
         }
     }
 
-    /// Set the session ID
+    /// Set the session ID (only sets if not already set)
     pub fn set_session_id(&self, session_id: impl Into<String>) {
-        self.session_id
-            .set(session_id.into())
-            .expect("session_id already set");
+        // Only set if not already set - configure_acp_server may be called multiple times
+        if self.session_id.get().is_none() {
+            drop(self.session_id.set(session_id.into()));
+        }
     }
 
-    /// Set the ACP connection
+    /// Set the ACP connection (only sets if not already set)
     pub fn set_connection(&self, cx: JrConnectionCx<AgentToClient>) {
-        self.connection_cx
-            .set(cx)
-            .expect("connection_cx already set");
+        // Only set if not already set - configure_acp_server may be called multiple times
+        if self.connection_cx.get().is_none() {
+            drop(self.connection_cx.set(cx));
+        }
     }
 
-    /// Set the terminal client
+    /// Set the terminal client (only sets if not already set)
     pub fn set_terminal_client(&self, client: Arc<TerminalClient>) {
-        self.terminal_client
-            .set(client)
-            .expect("terminal_client already set");
+        // Only set if not already set - configure_acp_server may be called multiple times
+        if self.terminal_client.get().is_none() {
+            drop(self.terminal_client.set(client));
+        }
     }
 
-    /// Set the background process manager
+    /// Set the background process manager (only sets if not already set)
     pub fn set_background_processes(&self, manager: Arc<BackgroundProcessManager>) {
-        self.background_processes
-            .set(manager)
-            .expect("background_processes already set");
+        // Only set if not already set - configure_acp_server may be called multiple times
+        if self.background_processes.get().is_none() {
+            drop(self.background_processes.set(manager));
+        }
     }
 
     /// Set the working directory
