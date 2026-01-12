@@ -9,10 +9,10 @@ use std::sync::Arc;
 use crate::mcp::external::{ExternalMcpError, ExternalMcpManager};
 use crate::mcp::registry::{ToolContext, ToolRegistry, ToolResult, ToolSchema};
 use crate::mcp::tools::{
-    AskUserQuestionTool, BashOutputTool, BashTool, EditTool, ExitPlanModeTool, GlobTool,
-    GrepTool, KillShellTool, LsTool, NotebookEditTool, NotebookReadTool, ReadTool,
-    SkillTool, SlashCommandTool, TaskOutputTool, TaskTool, TodoWriteTool, Tool,
-    WebFetchTool, WebSearchTool, WriteTool,
+    AskUserQuestionTool, BashOutputTool, BashTool, EditTool, ExitPlanModeTool, GlobTool, GrepTool,
+    KillShellTool, LsTool, NotebookEditTool, NotebookReadTool, ReadTool, SkillTool,
+    SlashCommandTool, TaskOutputTool, TaskTool, TodoWriteTool, Tool, WebFetchTool, WebSearchTool,
+    WriteTool,
 };
 use crate::settings::McpServerConfig;
 

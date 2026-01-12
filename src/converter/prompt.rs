@@ -42,6 +42,14 @@ impl PromptConverter {
             "image" => Self::convert_image(item),
             "resource" => Self::convert_resource(item),
             "resource_link" => Self::convert_resource_link(item),
+            "audio" => {
+                // Audio is not supported (consistent with TS implementation)
+                // The TypeScript reference implementation explicitly ignores audio content blocks
+                tracing::debug!(
+                    "Audio content blocks are not supported (consistent with TS implementation)"
+                );
+                None
+            }
             _ => {
                 tracing::warn!("Unknown content type: {}", content_type);
                 None
@@ -228,5 +236,41 @@ mod tests {
     fn test_text_to_content() {
         let result = text_to_content("Hello");
         assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_convert_audio_explicitly_ignored() {
+        // Audio content blocks should be silently ignored (consistent with TS implementation)
+        let converter = PromptConverter::new();
+        let content = vec![json!({
+            "type": "audio",
+            "data": "base64_audio_data",
+            "mimeType": "audio/mp3"
+        })];
+
+        let result = converter.convert_content(&content);
+        assert_eq!(
+            result.len(),
+            0,
+            "Audio should be ignored and not produce any content blocks"
+        );
+    }
+
+    #[test]
+    fn test_convert_audio_with_other_content() {
+        // Audio should be ignored while other content types are processed
+        let converter = PromptConverter::new();
+        let content = vec![
+            json!({"type": "text", "text": "Hello"}),
+            json!({"type": "audio", "data": "base64_audio_data", "mimeType": "audio/mp3"}),
+            json!({"type": "text", "text": "World"}),
+        ];
+
+        let result = converter.convert_content(&content);
+        assert_eq!(
+            result.len(),
+            2,
+            "Only text content should be present, audio ignored"
+        );
     }
 }

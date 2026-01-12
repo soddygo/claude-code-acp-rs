@@ -6,9 +6,9 @@
 //! asking is handled by the Claude agent SDK through its own mechanisms.
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::mcp::{ToolContext, ToolResult, Tool};
+use crate::mcp::{Tool, ToolContext, ToolResult};
 
 /// Ask User Question tool
 #[derive(Debug, Clone, Default)]
@@ -57,10 +57,7 @@ impl Tool for AskUserQuestionTool {
 
     async fn execute(&self, input: Value, _context: &ToolContext) -> ToolResult {
         // Extract parameters
-        let question = input
-            .get("question")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let question = input.get("question").and_then(|v| v.as_str()).unwrap_or("");
 
         let options = input.get("options").and_then(|v| v.as_array());
         let allow_freeform = input
@@ -69,12 +66,11 @@ impl Tool for AskUserQuestionTool {
             .unwrap_or(false);
 
         // Return success - the actual question asking is handled by the SDK
-        ToolResult::success(format!("Question: '{}'", question))
-            .with_metadata(json!({
-                "question": question,
-                "has_options": options.is_some(),
-                "allow_freeform": allow_freeform
-            }))
+        ToolResult::success(format!("Question: '{}'", question)).with_metadata(json!({
+            "question": question,
+            "has_options": options.is_some(),
+            "allow_freeform": allow_freeform
+        }))
     }
 }
 

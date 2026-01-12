@@ -4,8 +4,11 @@
 //! Phase 2: Full permission prompts with settings rules and user interaction.
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use crate::settings::{PermissionChecker, PermissionDecision};
+use claude_code_agent_sdk::PermissionMode as SdkPermissionMode;
 
 /// Permission mode for tool execution
 ///
@@ -20,6 +23,8 @@ pub enum PermissionMode {
     AcceptEdits,
     /// Planning mode - read-only operations
     Plan,
+    /// Don't ask mode - deny if not pre-approved
+    DontAsk,
     /// Bypass all permission checks (dangerous)
     BypassPermissions,
 }
@@ -31,6 +36,7 @@ impl PermissionMode {
             "default" => Some(Self::Default),
             "acceptEdits" => Some(Self::AcceptEdits),
             "plan" => Some(Self::Plan),
+            "dontAsk" => Some(Self::DontAsk),
             "bypassPermissions" => Some(Self::BypassPermissions),
             _ => None,
         }
@@ -42,7 +48,24 @@ impl PermissionMode {
             Self::Default => "default",
             Self::AcceptEdits => "acceptEdits",
             Self::Plan => "plan",
+            Self::DontAsk => "dontAsk",
             Self::BypassPermissions => "bypassPermissions",
+        }
+    }
+
+    /// Convert to SDK PermissionMode
+    ///
+    /// Note: SDK doesn't support DontAsk mode yet, so we map it to Default
+    pub fn to_sdk_mode(&self) -> SdkPermissionMode {
+        match self {
+            PermissionMode::Default => SdkPermissionMode::Default,
+            PermissionMode::AcceptEdits => SdkPermissionMode::AcceptEdits,
+            PermissionMode::Plan => SdkPermissionMode::Plan,
+            PermissionMode::DontAsk => {
+                // SDK doesn't support DontAsk yet, treat as Default
+                SdkPermissionMode::Default
+            }
+            PermissionMode::BypassPermissions => SdkPermissionMode::BypassPermissions,
         }
     }
 
@@ -74,11 +97,23 @@ pub enum ToolPermissionResult {
 /// Permission handler for tool execution
 ///
 /// Combines mode-based checking with settings rules.
-#[derive(Debug, Default)]
+///
+/// The permission checker is shared with the pre_tool_use_hook to ensure
+/// that runtime rule changes (e.g., "Always Allow") are reflected in both places.
+#[derive(Debug)]
 pub struct PermissionHandler {
     mode: PermissionMode,
-    /// Permission checker from settings (optional)
-    checker: Option<PermissionChecker>,
+    /// Shared permission checker from settings (shared with hook)
+    checker: Option<Arc<RwLock<PermissionChecker>>>,
+}
+
+impl Default for PermissionHandler {
+    fn default() -> Self {
+        Self {
+            mode: PermissionMode::Default,
+            checker: None,
+        }
+    }
 }
 
 impl PermissionHandler {
@@ -96,10 +131,18 @@ impl PermissionHandler {
     }
 
     /// Create with settings-based checker
-    pub fn with_checker(checker: PermissionChecker) -> Self {
+    pub fn with_checker(checker: Arc<RwLock<PermissionChecker>>) -> Self {
         Self {
             mode: PermissionMode::Default,
             checker: Some(checker),
+        }
+    }
+
+    /// Create with settings-based checker (non-async, for convenience)
+    pub fn with_checker_owned(checker: PermissionChecker) -> Self {
+        Self {
+            mode: PermissionMode::Default,
+            checker: Some(Arc::new(RwLock::new(checker))),
         }
     }
 
@@ -114,13 +157,19 @@ impl PermissionHandler {
     }
 
     /// Set the permission checker
-    pub fn set_checker(&mut self, checker: PermissionChecker) {
+    pub fn set_checker(&mut self, checker: Arc<RwLock<PermissionChecker>>) {
         self.checker = Some(checker);
     }
 
     /// Get mutable reference to checker (for adding runtime rules)
-    pub fn checker_mut(&mut self) -> Option<&mut PermissionChecker> {
-        self.checker.as_mut()
+    pub async fn checker_mut(
+        &mut self,
+    ) -> Option<tokio::sync::RwLockWriteGuard<'_, PermissionChecker>> {
+        if let Some(ref checker) = self.checker {
+            Some(checker.write().await)
+        } else {
+            None
+        }
     }
 
     /// Check if a tool operation should be auto-approved
@@ -139,6 +188,11 @@ impl PermissionHandler {
             PermissionMode::Plan => {
                 // Only allow read operations in plan mode
                 matches!(tool_name, "Read" | "Glob" | "Grep" | "NotebookRead")
+            }
+            PermissionMode::DontAsk => {
+                // DontAsk mode: only pre-approved tools via settings rules
+                // No auto-approval
+                false
             }
             PermissionMode::Default => {
                 // Only auto-approve read operations
@@ -161,7 +215,7 @@ impl PermissionHandler {
     ///
     /// Combines mode-based checking with settings rules.
     /// Returns the permission result.
-    pub fn check_permission(
+    pub async fn check_permission(
         &self,
         tool_name: &str,
         tool_input: &serde_json::Value,
@@ -184,7 +238,8 @@ impl PermissionHandler {
 
         // Check settings rules if available
         if let Some(ref checker) = self.checker {
-            let result = checker.check_permission(tool_name, tool_input);
+            let checker_read = checker.read().await;
+            let result = checker_read.check_permission(tool_name, tool_input);
             match result.decision {
                 PermissionDecision::Deny => {
                     return ToolPermissionResult::Blocked {
@@ -213,9 +268,10 @@ impl PermissionHandler {
     }
 
     /// Add a runtime allow rule (e.g., from user's "Always Allow" choice)
-    pub fn add_allow_rule(&mut self, tool_name: &str) {
-        if let Some(ref mut checker) = self.checker {
-            checker.add_allow_rule(tool_name);
+    pub async fn add_allow_rule(&self, tool_name: &str) {
+        if let Some(ref checker) = self.checker {
+            let mut checker_write = checker.write().await;
+            checker_write.add_allow_rule(tool_name);
         }
     }
 }

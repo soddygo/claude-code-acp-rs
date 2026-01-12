@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::tools::Tool;
 use crate::session::BackgroundProcessManager;
+use crate::settings::PermissionChecker;
 use crate::terminal::TerminalClient;
 
 /// Tool execution result
@@ -88,6 +89,8 @@ pub struct ToolContext {
     tool_use_id: Option<String>,
     /// Connection context for sending notifications
     connection_cx: Option<JrConnectionCx<AgentToClient>>,
+    /// Permission checker for tool-level permission checks
+    pub permission_checker: Option<Arc<tokio::sync::RwLock<PermissionChecker>>>,
 }
 
 impl ToolContext {
@@ -101,6 +104,7 @@ impl ToolContext {
             terminal_client: None,
             tool_use_id: None,
             connection_cx: None,
+            permission_checker: None,
         }
     }
 
@@ -131,6 +135,15 @@ impl ToolContext {
     /// Set the connection context for sending notifications
     pub fn with_connection_cx(mut self, cx: JrConnectionCx<AgentToClient>) -> Self {
         self.connection_cx = Some(cx);
+        self
+    }
+
+    /// Set the permission checker for tool-level permission checks
+    pub fn with_permission_checker(
+        mut self,
+        checker: Arc<tokio::sync::RwLock<PermissionChecker>>,
+    ) -> Self {
+        self.permission_checker = Some(checker);
         self
     }
 

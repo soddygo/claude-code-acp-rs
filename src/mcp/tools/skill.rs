@@ -7,9 +7,9 @@
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::mcp::{ToolContext, ToolResult, Tool};
+use crate::mcp::{Tool, ToolContext, ToolResult};
 
 /// Skill tool
 #[derive(Debug, Default)]
@@ -68,11 +68,10 @@ impl Tool for SkillTool {
         };
 
         // Return success - the actual skill execution is handled by the SDK
-        ToolResult::success(format!("Skill: '{}'", params.skill))
-            .with_metadata(json!({
-                "skill": params.skill,
-                "args": params.args
-            }))
+        ToolResult::success(format!("Skill: '{}'", params.skill)).with_metadata(json!({
+            "skill": params.skill,
+            "args": params.args
+        }))
     }
 }
 
@@ -95,10 +94,11 @@ mod tests {
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["title"], "skill");
         assert!(schema["properties"]["skill"].is_object());
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("skill"))
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("skill"))
         );
     }
 }

@@ -10,17 +10,23 @@
 
 mod background_processes;
 mod manager;
-mod wrapped_child;
 mod permission;
+mod permission_manager;
 mod permission_request;
 #[allow(clippy::module_inception)]
 mod session;
 mod usage;
+mod wrapped_child;
 
-pub use background_processes::{BackgroundProcessManager, BackgroundTerminal, ChildHandle, TerminalExitStatus};
-pub use wrapped_child::WrappedChild;
+pub use background_processes::{
+    BackgroundProcessManager, BackgroundTerminal, ChildHandle, TerminalExitStatus,
+};
 pub use manager::SessionManager;
 pub use permission::{PermissionHandler, PermissionMode, ToolPermissionResult};
+pub use permission_manager::{
+    PendingPermissionRequest, PermissionManager, PermissionManagerDecision,
+};
 pub use permission_request::{PermissionOutcome, PermissionRequestBuilder};
 pub use session::Session;
 pub use usage::UsageTracker;
+pub use wrapped_child::WrappedChild;

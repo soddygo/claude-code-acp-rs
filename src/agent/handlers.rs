@@ -17,7 +17,7 @@ use sacp::schema::{
     InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
     NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse, SessionId, SessionMode,
     SessionModeId, SessionModeState, SessionNotification, SessionUpdate, SetSessionModeRequest,
-    SetSessionModeResponse, StopReason, TextContent,
+    SetSessionModeResponse, StopReason,
 };
 use tokio::sync::broadcast;
 use tracing::instrument;
@@ -277,6 +277,10 @@ pub async fn handle_prompt(
         .configure_acp_server(connection_cx.clone(), Some(terminal_client))
         .await;
 
+    // Set connection context for permission requests
+    // This enables the can_use_tool callback to send permission requests to the client
+    session.set_connection_cx(connection_cx.clone());
+
     // Connect external MCP servers first (if any)
     // This ensures external tools are available when Claude CLI starts
     let external_mcp_start = Instant::now();
@@ -427,6 +431,15 @@ pub async fn handle_prompt(
             Ok(Some(Ok(message))) => {
                 message_count += 1;
 
+                // Log message type for debugging
+                let msg_type = format!("{:?}", message);
+                tracing::debug!(
+                    session_id = %session_id,
+                    message_count = message_count,
+                    msg_type = %msg_type.chars().take(50).collect::<String>(),
+                    "Received message from SDK"
+                );
+
                 // Convert SDK message to ACP notifications
                 let notifications = converter.convert_message(&message, session_id);
                 let batch_size = notifications.len();
@@ -538,8 +551,21 @@ pub async fn handle_set_mode(
         AgentError::InvalidMode(mode_id_str.to_string())
     })?;
 
-    // Set the mode
+    // Set the mode in our permission handler
     session.set_permission_mode(mode).await;
+
+    // Also set the mode in the SDK client
+    // This is important for the SDK to know the current permission mode
+    let sdk_mode = mode.to_sdk_mode();
+    if let Err(e) = session.client().await.set_permission_mode(sdk_mode).await {
+        tracing::warn!(
+            session_id = %session_id_str,
+            mode = %mode_id_str,
+            error = %e,
+            "Failed to set SDK permission mode (continuing anyway)"
+        );
+        // Don't fail - the local mode is still set
+    }
 
     // Send CurrentModeUpdate notification to inform the client
     let mode_update = CurrentModeUpdate::new(SessionModeId::new(mode_id_str));
@@ -596,14 +622,62 @@ pub async fn handle_cancel(
 }
 
 /// Extract text from ACP content blocks
+///
+/// This handles all ContentBlock types:
+/// - Text: Direct text content
+/// - Resource: Embedded file content (prefers this as it contains the actual file text)
+/// - ResourceLink: File references (includes URI as context)
+/// - Image: Ignored (not text content - images should be handled by PromptConverter as SDK ImageBlock)
+/// - Audio: Ignored (not text content - consistent with TypeScript reference implementation)
+///
+/// Note: This function extracts text-only content for logging/transcript purposes.
+/// Image blocks are handled by PromptConverter and converted to SDK ImageBlock for the Claude API.
+/// Audio blocks are not supported (consistent with vendors/claude-code-acp/src/acp-agent.ts).
 fn extract_text_from_content(blocks: &[ContentBlock]) -> String {
     blocks
         .iter()
         .filter_map(|block| {
-            if let ContentBlock::Text(TextContent { text, .. }) = block {
-                Some(text.clone())
-            } else {
-                None
+            match block {
+                ContentBlock::Text(text_content) => Some(text_content.text.clone()),
+                ContentBlock::Resource(embedded_resource) => {
+                    // Extract text from embedded resource content
+                    match &embedded_resource.resource {
+                        sacp::schema::EmbeddedResourceResource::TextResourceContents(
+                            text_resource,
+                        ) => {
+                            // Format as context tag with URI
+                            Some(format!(
+                                "<context uri=\"{}\">\n{}\n</context>",
+                                text_resource.uri, text_resource.text
+                            ))
+                        }
+                        sacp::schema::EmbeddedResourceResource::BlobResourceContents(
+                            blob_resource,
+                        ) => {
+                            // Binary resource - include URI reference
+                            Some(format!("<context uri=\"{}\" />", blob_resource.uri))
+                        }
+                        // Handle any future resource types
+                        _ => None,
+                    }
+                }
+                ContentBlock::ResourceLink(resource_link) => {
+                    // ResourceLink - include URI reference as context
+                    // Note: This doesn't include the file content, just a reference
+                    let uri = &resource_link.uri;
+                    let title = resource_link.title.as_deref().unwrap_or("");
+                    if !title.is_empty() {
+                        Some(format!("[{title}]({uri})"))
+                    } else {
+                        Some(format!("<resource uri=\"{uri}\" />"))
+                    }
+                }
+                ContentBlock::Image(_) | ContentBlock::Audio(_) => {
+                    // Images and audio are not text content - skip them
+                    None
+                }
+                // Handle any future ContentBlock types
+                _ => None,
             }
         })
         .collect::<Vec<_>>()
@@ -613,7 +687,7 @@ fn extract_text_from_content(blocks: &[ContentBlock]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sacp::schema::ProtocolVersion;
+    use sacp::schema::{ProtocolVersion, TextContent};
     use std::path::PathBuf;
 
     #[test]

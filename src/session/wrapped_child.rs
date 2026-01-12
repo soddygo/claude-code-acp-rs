@@ -3,9 +3,9 @@
 //! Provides a unified interface over process-wrap's ChildWrapper
 //! while maintaining compatibility with existing Arc<Mutex<>> pattern.
 
+use process_wrap::tokio::ChildWrapper;
 use std::io;
 use std::pin::Pin;
-use process_wrap::tokio::ChildWrapper;
 
 /// Wrapper around Box<dyn ChildWrapper> that provides
 /// a stable interface compatible with Arc<Mutex<>>

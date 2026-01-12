@@ -72,6 +72,7 @@ pub mod cli;
 pub mod converter;
 pub mod hooks;
 pub mod mcp;
+pub mod permissions;
 pub mod session;
 pub mod settings;
 pub mod terminal;

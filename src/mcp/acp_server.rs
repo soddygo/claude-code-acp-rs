@@ -27,6 +27,7 @@ use tracing::instrument;
 use super::registry::{ToolContext, ToolResult};
 use super::server::McpServer;
 use crate::session::BackgroundProcessManager;
+use crate::settings::PermissionChecker;
 use crate::terminal::TerminalClient;
 
 /// ACP-integrated MCP server
@@ -60,6 +61,8 @@ pub struct AcpMcpServer {
     background_processes: OnceLock<Arc<BackgroundProcessManager>>,
     /// Working directory (can be updated)
     cwd: Arc<RwLock<std::path::PathBuf>>,
+    /// Permission checker for tool-level permission checks
+    permission_checker: OnceLock<Arc<RwLock<PermissionChecker>>>,
     /// Cancel callback - called when MCP cancellation notification is received
     /// Uses Mutex (not RwLock) because writes are rare and we need try_lock for deadlock safety
     cancel_callback: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
@@ -90,6 +93,7 @@ impl AcpMcpServer {
             terminal_client: OnceLock::new(),
             background_processes: OnceLock::new(),
             cwd: Arc::new(RwLock::new(std::path::PathBuf::from("/tmp"))),
+            permission_checker: OnceLock::new(),
             cancel_callback: Arc::new(Mutex::new(None)),
         }
     }
@@ -123,6 +127,14 @@ impl AcpMcpServer {
         // Only set if not already set - configure_acp_server may be called multiple times
         if self.background_processes.get().is_none() {
             drop(self.background_processes.set(manager));
+        }
+    }
+
+    /// Set the permission checker (only sets if not already set)
+    pub fn set_permission_checker(&self, checker: Arc<RwLock<PermissionChecker>>) {
+        // Only set if not already set - configure_acp_server may be called multiple times
+        if self.permission_checker.get().is_none() {
+            drop(self.permission_checker.set(checker));
         }
     }
 
@@ -379,11 +391,16 @@ impl AcpMcpServer {
     /// Create a tool context for tool execution
     async fn create_tool_context(&self, tool_use_id: Option<&str>) -> ToolContext {
         // OnceLock provides lock-free access after initialization
-        let session_id = self.session_id.get().map(|s| s.as_str()).unwrap_or("unknown");
+        let session_id = self
+            .session_id
+            .get()
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
         let cwd = self.cwd.read().await;
         let terminal_client = self.terminal_client.get();
         let background_processes = self.background_processes.get();
         let connection_cx = self.connection_cx.get();
+        let permission_checker = self.permission_checker.get();
 
         let mut context = ToolContext::new(session_id.to_string(), cwd.clone());
 
@@ -401,6 +418,10 @@ impl AcpMcpServer {
 
         if let Some(cx) = connection_cx {
             context = context.with_connection_cx(cx.clone());
+        }
+
+        if let Some(checker) = permission_checker {
+            context = context.with_permission_checker(checker.clone());
         }
 
         context
@@ -491,11 +512,9 @@ impl AcpMcpServer {
             #[cfg(feature = "verbose-debug")]
             tracing::debug!("Locks acquired, checking if we have all required data");
 
-            if let (Some(cx), Some(session_id), Some(tool_use_id)) = (
-                connection_cx,
-                session_id,
-                tool_use_id,
-            ) {
+            if let (Some(cx), Some(session_id), Some(tool_use_id)) =
+                (connection_cx, session_id, tool_use_id)
+            {
                 let status = if result.is_error {
                     ToolCallStatus::Failed
                 } else {
@@ -645,11 +664,9 @@ impl AcpMcpServer {
         // Send terminal_info notification at start (if we have connection)
         // IMPORTANT: Use ToolCall (not ToolCallUpdate) notification because Zed
         // only creates terminals when terminal_info is in a ToolCall notification.
-        if let (Some(cx), Some(session_id), Some(tool_use_id)) = (
-            connection_cx,
-            session_id,
-            tool_use_id,
-        ) {
+        if let (Some(cx), Some(session_id), Some(tool_use_id)) =
+            (connection_cx, session_id, tool_use_id)
+        {
             // Build meta with terminal_info and optional description for future use
             let mut meta_json = serde_json::json!({
                 "terminal_info": {
@@ -1786,10 +1803,7 @@ mod tests {
         }
 
         let elapsed = start.elapsed();
-        println!(
-            "All concurrent tasks completed in {:?}",
-            elapsed
-        );
+        println!("All concurrent tasks completed in {:?}", elapsed);
 
         // Should complete well within timeout
         assert!(elapsed < timeout_duration, "Possible deadlock detected");

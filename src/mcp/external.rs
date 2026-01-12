@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
@@ -804,7 +804,8 @@ impl ExternalMcpManager {
         );
 
         // Insert server into DashMap (no async needed)
-        self.servers.insert(name, Arc::new(tokio::sync::Mutex::new(server)));
+        self.servers
+            .insert(name, Arc::new(tokio::sync::Mutex::new(server)));
         Ok(())
     }
 
@@ -815,7 +816,10 @@ impl ExternalMcpManager {
 
     /// Get all connected server names
     pub fn server_names(&self) -> Vec<String> {
-        self.servers.iter().map(|entry| entry.key().clone()).collect()
+        self.servers
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     /// Get all available tools from all servers

@@ -7,11 +7,12 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::sync::broadcast;
 
+use claude_code_agent_sdk::types::config::PermissionMode as SdkPermissionMode;
 use claude_code_agent_sdk::types::mcp::McpSdkServerConfig;
 use claude_code_agent_sdk::{
     ClaudeAgentOptions, ClaudeClient, HookEvent, HookMatcher, McpServerConfig, McpServers,
@@ -26,6 +27,7 @@ use tracing::instrument;
 use crate::converter::NotificationConverter;
 use crate::hooks::{HookCallbackRegistry, create_post_tool_use_hook, create_pre_tool_use_hook};
 use crate::mcp::AcpMcpServer;
+use crate::permissions::create_can_use_tool_callback;
 use crate::settings::{PermissionChecker, SettingsManager};
 use crate::terminal::TerminalClient;
 use crate::types::{AgentConfig, AgentError, NewSessionMeta, Result};
@@ -67,8 +69,8 @@ pub struct Session {
     client: RwLock<ClaudeClient>,
     /// Whether this session has been cancelled
     cancelled: Arc<AtomicBool>,
-    /// Permission handler for tool execution
-    permission: RwLock<PermissionHandler>,
+    /// Permission handler for tool execution (wrapped in Arc for can_use_tool callback)
+    permission: Arc<RwLock<PermissionHandler>>,
     /// Token usage tracker
     usage_tracker: UsageTracker,
     /// Notification converter with tool use cache
@@ -79,6 +81,8 @@ pub struct Session {
     hook_callback_registry: Arc<HookCallbackRegistry>,
     /// Permission checker for hooks
     permission_checker: Arc<RwLock<PermissionChecker>>,
+    /// Shared permission mode (synced with permission handler and hooks)
+    permission_mode: Arc<RwLock<PermissionMode>>,
     /// Current model ID for this session (set once during initialization)
     current_model: OnceLock<String>,
     /// ACP MCP server for tool execution with notifications
@@ -90,12 +94,18 @@ pub struct Session {
     external_mcp_servers: OnceLock<Vec<McpServer>>,
     /// Whether external MCP servers have been connected
     external_mcp_connected: AtomicBool,
+    /// Connection context OnceLock for ACP requests (shared with hooks)
+    /// Used by pre_tool_use_hook for permission requests
+    connection_cx_lock: Arc<OnceLock<JrConnectionCx<AgentToClient>>>,
     /// Cancel signal sender - used to notify when MCP cancellation is received
     cancel_sender: broadcast::Sender<()>,
 }
 
 impl Session {
-    /// Create a new session
+    /// Create a new session and wrap in Arc
+    ///
+    /// Returns Arc<Self> because the can_use_tool callback needs Arc<Session>.
+    /// We use OnceLock to break the circular dependency between Session and callback.
     ///
     /// # Arguments
     ///
@@ -117,7 +127,7 @@ impl Session {
         cwd: PathBuf,
         config: &AgentConfig,
         meta: Option<&NewSessionMeta>,
-    ) -> Result<Self> {
+    ) -> Result<Arc<Self>> {
         let start_time = Instant::now();
 
         tracing::info!(
@@ -150,13 +160,28 @@ impl Session {
                     }
                 }
             });
+        // Create shared permission checker that will be used by both hook and permission handler
+        // This ensures that runtime rule changes (e.g., "Always Allow") are reflected in both places
         let permission_checker = Arc::new(RwLock::new(PermissionChecker::new(
             settings_manager.settings().clone(),
             &cwd,
         )));
 
-        // Create hooks
-        let pre_tool_use_hook = create_pre_tool_use_hook(permission_checker.clone());
+        // Create shared permission mode that can be updated at runtime
+        // This is shared between the hook and the permission handler
+        let permission_mode = Arc::new(RwLock::new(PermissionMode::Default));
+
+        // Create shared connection_cx_lock for hook permission requests
+        let connection_cx_lock: Arc<OnceLock<JrConnectionCx<AgentToClient>>> =
+            Arc::new(OnceLock::new());
+
+        // Create hooks with shared permission checker and mode
+        let pre_tool_use_hook = create_pre_tool_use_hook(
+            connection_cx_lock.clone(),
+            session_id.clone(),
+            Some(permission_checker.clone()),
+            permission_mode.clone(),
+        );
         let post_tool_use_hook = create_post_tool_use_hook(hook_callback_registry.clone());
 
         // Build hooks map
@@ -184,6 +209,15 @@ impl Session {
             "Hooks configured: PreToolUse, PostToolUse"
         );
 
+        // Create PermissionHandler with shared PermissionChecker
+        // This ensures both pre_tool_use_hook and can_use_tool callback use the same rules
+        let permission_handler = Arc::new(RwLock::new(PermissionHandler::with_checker(
+            permission_checker.clone(),
+        )));
+
+        // Create OnceLock for storing Arc<Session> (needed for callback)
+        let session_lock: Arc<OnceLock<Arc<Session>>> = Arc::new(OnceLock::new());
+
         // Create ACP MCP server
         let acp_mcp_server = Arc::new(AcpMcpServer::new("acp", env!("CARGO_PKG_VERSION")));
 
@@ -206,12 +240,25 @@ impl Session {
             "MCP servers configured"
         );
 
+        // Create can_use_tool callback with OnceLock<Session>
+        let can_use_tool_callback = create_can_use_tool_callback(session_lock.clone());
+
         // Build ClaudeAgentOptions
         let mut options = ClaudeAgentOptions::builder()
             .cwd(cwd.clone())
             .hooks(hooks_map)
             .mcp_servers(McpServers::Dict(mcp_servers_dict))
+            .can_use_tool(can_use_tool_callback)
+            .permission_mode(SdkPermissionMode::Default)
             .build();
+
+        // Debug: Verify can_use_tool is set
+        tracing::info!(
+            session_id = %session_id,
+            has_can_use_tool = options.can_use_tool.is_some(),
+            has_hooks = options.hooks.is_some(),
+            "Options configured after build"
+        );
 
         // Verify mcp_servers is set correctly
         match &options.mcp_servers {
@@ -324,24 +371,35 @@ impl Session {
         // Clone cwd for converter before moving cwd into the struct
         let cwd_for_converter = cwd.clone();
 
-        Ok(Self {
+        // Build the Session struct
+        let session = Self {
             session_id,
             cwd,
             client: RwLock::new(client),
             cancelled: Arc::new(AtomicBool::new(false)),
-            permission: RwLock::new(PermissionHandler::new()),
+            permission: permission_handler,
             usage_tracker: UsageTracker::new(),
             converter: NotificationConverter::with_cwd(cwd_for_converter),
             connected: AtomicBool::new(false),
             hook_callback_registry,
             permission_checker,
+            permission_mode,
             current_model: OnceLock::new(),
             acp_mcp_server,
             background_processes,
             external_mcp_servers: OnceLock::new(),
             external_mcp_connected: AtomicBool::new(false),
+            connection_cx_lock,
             cancel_sender: broadcast::channel(1).0,
-        })
+        };
+
+        // Wrap in Arc
+        let session_arc = Arc::new(session);
+
+        // Set the OnceLock so the callback can access the Session
+        drop(session_lock.set(session_arc.clone()));
+
+        Ok(session_arc)
     }
 
     /// Set external MCP servers to connect
@@ -398,6 +456,23 @@ impl Session {
         if self.external_mcp_servers.get().is_none() {
             drop(self.external_mcp_servers.set(servers));
         }
+    }
+
+    /// Set the connection context for ACP requests
+    ///
+    /// This is called once during handle_prompt to enable permission requests.
+    /// The OnceLock ensures it's only set once even if called multiple times.
+    pub fn set_connection_cx(&self, cx: JrConnectionCx<AgentToClient>) {
+        if self.connection_cx_lock.get().is_none() {
+            drop(self.connection_cx_lock.set(cx));
+        }
+    }
+
+    /// Get the connection context if available
+    ///
+    /// Returns None if called before handle_prompt sets the connection.
+    pub fn get_connection_cx(&self) -> Option<&JrConnectionCx<AgentToClient>> {
+        self.connection_cx_lock.get()
     }
 
     /// Connect to external MCP servers
@@ -723,8 +798,27 @@ impl Session {
     }
 
     /// Set the permission mode
+    ///
+    /// Updates both the PermissionHandler and the shared permission mode
+    /// used by the pre_tool_use_hook.
     pub async fn set_permission_mode(&self, mode: PermissionMode) {
+        // Update the permission handler
         self.permission.write().await.set_mode(mode);
+        // Also update the shared permission mode used by the hook
+        *self.permission_mode.write().await = mode;
+
+        tracing::info!(
+            session_id = %self.session_id,
+            mode = mode.as_str(),
+            "Permission mode updated"
+        );
+    }
+
+    /// Add an allow rule for a tool
+    ///
+    /// This is called when user selects "Always Allow" in permission prompt.
+    pub async fn add_permission_allow_rule(&self, tool_name: &str) {
+        self.permission.read().await.add_allow_rule(tool_name).await;
     }
 
     /// Get the current model ID
@@ -800,6 +894,8 @@ impl Session {
         self.acp_mcp_server.set_cwd(self.cwd.clone()).await;
         self.acp_mcp_server
             .set_background_processes(self.background_processes.clone());
+        self.acp_mcp_server
+            .set_permission_checker(self.permission_checker.clone());
 
         if let Some(client) = terminal_client {
             self.acp_mcp_server.set_terminal_client(client);

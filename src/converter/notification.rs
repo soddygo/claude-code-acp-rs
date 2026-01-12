@@ -116,28 +116,37 @@ impl NotificationConverter {
     }
 
     /// Convert an assistant message
+    ///
+    /// Note: In streaming mode, Text and Thinking blocks are delivered via
+    /// content_block_delta events (StreamEvent), so we skip them here to avoid
+    /// sending the same content twice. Only ToolUse and ToolResult blocks are
+    /// processed from non-streamed messages.
     fn convert_assistant_message(
         &self,
         assistant: &AssistantMessage,
-        session_id: &SessionId,
+        _session_id: &SessionId,
     ) -> Vec<SessionNotification> {
         let mut notifications = Vec::new();
 
         for block in &assistant.message.content {
             match block {
-                SdkContentBlock::Text(text) => {
-                    notifications.push(self.make_agent_message(session_id, &text.text));
+                // Skip Text and Thinking blocks in streaming mode
+                // They are delivered via StreamEvent::content_block_delta
+                SdkContentBlock::Text(_) => {
+                    // Skip - handled by stream events
                 }
-                SdkContentBlock::Thinking(thinking) => {
-                    notifications.push(self.make_agent_thought(session_id, &thinking.thinking));
+                SdkContentBlock::Thinking(_) => {
+                    // Skip - handled by stream events
                 }
                 SdkContentBlock::ToolUse(tool_use) => {
                     // Cache the tool use for later correlation with result
                     self.cache_tool_use(tool_use);
-                    notifications.push(self.make_tool_call(session_id, tool_use));
+                    let session_id = _session_id;
+                    notifications.push(self.make_tool_call(&session_id, tool_use));
                 }
                 SdkContentBlock::ToolResult(tool_result) => {
-                    notifications.extend(self.make_tool_result(session_id, tool_result));
+                    let session_id = _session_id;
+                    notifications.extend(self.make_tool_result(&session_id, tool_result));
                 }
                 SdkContentBlock::Image(_) => {
                     // Images in assistant messages are not typically sent as notifications
@@ -166,7 +175,9 @@ impl NotificationConverter {
                     if let Some(block_type) = content_block.get("type").and_then(|v| v.as_str()) {
                         if block_type == "tool_use" || block_type == "mcp_tool_use" {
                             // Parse tool_use from content_block
-                            if let Ok(tool_use) = serde_json::from_value::<ToolUseBlock>(content_block.clone()) {
+                            if let Ok(tool_use) =
+                                serde_json::from_value::<ToolUseBlock>(content_block.clone())
+                            {
                                 self.cache_tool_use(&tool_use);
                                 return vec![self.make_tool_call(session_id, &tool_use)];
                             }
@@ -235,7 +246,10 @@ impl NotificationConverter {
     // === Notification builders ===
 
     /// Make an agent message notification (full text as chunk)
-    #[allow(clippy::unused_self)]
+    ///
+    /// Currently unused because Text blocks are skipped in convert_assistant_message
+    /// to avoid duplication with stream events.
+    #[allow(dead_code, clippy::unused_self)]
     fn make_agent_message(&self, session_id: &SessionId, text: &str) -> SessionNotification {
         // Use AgentMessageChunk since there's no AgentMessage variant
         SessionNotification::new(
@@ -258,7 +272,10 @@ impl NotificationConverter {
     }
 
     /// Make an agent thought notification (full thought as chunk)
-    #[allow(clippy::unused_self)]
+    ///
+    /// Currently unused because Thinking blocks are skipped in convert_assistant_message
+    /// to avoid duplication with stream events.
+    #[allow(dead_code, clippy::unused_self)]
     fn make_agent_thought(&self, session_id: &SessionId, thought: &str) -> SessionNotification {
         // Use AgentThoughtChunk since there's no separate thought variant
         SessionNotification::new(

@@ -9,6 +9,8 @@ use std::time::Instant;
 
 use super::base::{Tool, ToolKind};
 use crate::mcp::registry::{ToolContext, ToolResult};
+// TODO: Uncomment when implementing permission checks
+// use crate::settings::{PermissionCheckResult, PermissionDecision};
 
 /// Write tool for creating/overwriting files
 #[derive(Debug, Default)]
@@ -27,6 +29,30 @@ impl WriteTool {
     /// Create a new Write tool instance
     pub fn new() -> Self {
         Self
+    }
+
+    /// Check permission before executing the tool
+    ///
+    /// TODO: Implement interactive permission request flow
+    ///
+    /// Current implementation: Always allow execution (commented out permission checks)
+    ///
+    /// Future implementation should:
+    /// 1. Check for explicit deny rules - block if matched
+    /// 2. Check for explicit allow rules - allow if matched
+    /// 3. For "Ask" decisions - send permission request to client via PermissionManager
+    /// 4. Wait for user response - allow or deny based on user choice
+    ///
+    /// Architecture note: SDK does NOT call can_use_tool for MCP tools, so we need
+    /// to implement the permission request flow within the tool execution path.
+    async fn check_permission(
+        &self,
+        _input: &serde_json::Value,
+        _context: &ToolContext,
+    ) -> Option<ToolResult> {
+        // TODO: Implement permission checking
+        // See Edit tool's check_permission for implementation template
+        None
     }
 }
 
@@ -66,6 +92,11 @@ impl Tool for WriteTool {
     }
 
     async fn execute(&self, input: serde_json::Value, context: &ToolContext) -> ToolResult {
+        // Check permission before executing
+        if let Some(result) = self.check_permission(&input, context).await {
+            return result;
+        }
+
         // Parse input
         let params: WriteInput = match serde_json::from_value(input) {
             Ok(p) => p,

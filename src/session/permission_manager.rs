@@ -1,0 +1,296 @@
+//! Permission Manager - Async permission handling for MCP tools
+//!
+//! Based on Zed's permission system pattern:
+//! - Hook sends permission request and returns immediately
+//! - Background task handles the request
+//! - Uses unbounded channels (never block)
+//! - Uses one-shot channels for request/response
+
+use std::sync::Arc;
+
+use sacp::JrConnectionCx;
+use sacp::link::AgentToClient;
+use sacp::schema::{
+    PermissionOption, PermissionOptionId, PermissionOptionKind, RequestPermissionOutcome,
+    RequestPermissionRequest, SessionId, ToolCallUpdate, ToolCallUpdateFields,
+};
+
+use crate::types::AgentError;
+
+/// Permission decision result
+#[derive(Debug, Clone, PartialEq)]
+pub enum PermissionManagerDecision {
+    /// User allowed this tool call (one-time)
+    AllowOnce,
+    /// User allowed this tool call and wants to always allow this pattern
+    AllowAlways,
+    /// User rejected this tool call
+    Rejected,
+    /// Permission request was cancelled
+    Cancelled,
+}
+
+/// Pending permission request from hook
+pub struct PendingPermissionRequest {
+    pub tool_name: String,
+    pub tool_input: serde_json::Value,
+    pub tool_call_id: String,
+    pub session_id: String,
+    pub response_tx: tokio::sync::oneshot::Sender<PermissionManagerDecision>,
+}
+
+/// Permission Manager - handles permission requests in background tasks
+///
+/// # Architecture
+///
+/// Based on Zed's async permission pattern:
+/// 1. Hook sends request via unbounded channel (never blocks)
+/// 2. Background task processes request
+/// 3. One-shot channel returns result to caller
+///
+/// # Example
+///
+/// ```rust
+/// let manager = PermissionManager::new(connection_cx);
+/// let rx = manager.request_permission("Edit", input, "call_123", "session_456");
+/// let decision = rx.await?;
+/// ```
+pub struct PermissionManager {
+    /// Pending permission requests (unbounded, never blocks on send)
+    pending_requests: tokio::sync::mpsc::UnboundedSender<PendingPermissionRequest>,
+
+    /// Connection to client for sending permission requests
+    connection_cx: Arc<JrConnectionCx<AgentToClient>>,
+}
+
+impl PermissionManager {
+    /// Create a new PermissionManager
+    pub fn new(connection_cx: Arc<JrConnectionCx<AgentToClient>>) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Spawn background task to handle permission requests
+        tokio::spawn(async move {
+            Self::handle_permission_requests(rx).await;
+        });
+
+        Self {
+            pending_requests: tx,
+            connection_cx,
+        }
+    }
+
+    /// Request permission (non-blocking)
+    ///
+    /// Returns a receiver that will resolve when user responds.
+    ///
+    /// This never blocks - it immediately sends to the background task
+    /// and returns a receiver for the result.
+    pub fn request_permission(
+        &self,
+        tool_name: String,
+        tool_input: serde_json::Value,
+        tool_call_id: String,
+        session_id: String,
+    ) -> tokio::sync::oneshot::Receiver<PermissionManagerDecision> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        let request = PendingPermissionRequest {
+            tool_name,
+            tool_input,
+            tool_call_id,
+            session_id,
+            response_tx: tx,
+        };
+
+        // Send to background task (unbounded channel never blocks)
+        drop(self.pending_requests.send(request));
+
+        rx
+    }
+
+    /// Background task: handle permission requests
+    async fn handle_permission_requests(
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<PendingPermissionRequest>,
+    ) {
+        while let Some(request) = receiver.recv().await {
+            tracing::info!(
+                tool_name = %request.tool_name,
+                tool_call_id = %request.tool_call_id,
+                "Processing permission request in background task"
+            );
+
+            // TODO: Send permission request to client via SACP
+            // For now, we'll simulate the request and response
+
+            // This is where we would:
+            // 1. Build the RequestPermissionRequest
+            // 2. Send it via SACP to the client
+            // 3. Wait for the client's response
+            // 4. Send the result to response_tx
+
+            // For now, deny with a message explaining the limitation
+            let _ = request
+                .response_tx
+                .send(PermissionManagerDecision::Cancelled);
+
+            tracing::warn!(
+                tool_name = %request.tool_name,
+                "Permission request sent but interactive dialog not yet implemented"
+            );
+        }
+    }
+
+    /// Send permission request to client via SACP
+    async fn send_permission_request_to_client(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+        tool_call_id: &str,
+        session_id: &str,
+    ) -> Result<PermissionManagerDecision, AgentError> {
+        // Build the permission options
+        let options = vec![
+            PermissionOption::new(
+                PermissionOptionId::new("allow_always"),
+                "Always Allow",
+                PermissionOptionKind::AllowAlways,
+            ),
+            PermissionOption::new(
+                PermissionOptionId::new("allow_once"),
+                "Allow",
+                PermissionOptionKind::AllowOnce,
+            ),
+            PermissionOption::new(
+                PermissionOptionId::new("reject_once"),
+                "Reject",
+                PermissionOptionKind::RejectOnce,
+            ),
+        ];
+
+        // Build the tool call update with title
+        let tool_call_update = ToolCallUpdate::new(
+            tool_call_id.to_string(),
+            ToolCallUpdateFields::new()
+                .title(&format_tool_title(tool_name, tool_input))
+                .raw_input(tool_input.clone()),
+        );
+
+        // Build the request
+        let request =
+            RequestPermissionRequest::new(SessionId::new(session_id), tool_call_update, options);
+
+        // Send request and wait for response
+        let response = self
+            .connection_cx
+            .send_request(request)
+            .block_task()
+            .await
+            .map_err(|e| AgentError::Internal(format!("Permission request failed: {}", e)))?;
+
+        // Parse the response
+        Ok(parse_permission_response(response.outcome))
+    }
+}
+
+/// Parse a permission response outcome into our decision type
+fn parse_permission_response(outcome: RequestPermissionOutcome) -> PermissionManagerDecision {
+    match outcome {
+        RequestPermissionOutcome::Selected(selected) => {
+            match selected.option_id.0.as_ref() {
+                "allow_always" => PermissionManagerDecision::AllowAlways,
+                "allow_once" => PermissionManagerDecision::AllowOnce,
+                "reject_once" => PermissionManagerDecision::Rejected,
+                _ => PermissionManagerDecision::Rejected, // Unknown option, treat as reject
+            }
+        }
+        RequestPermissionOutcome::Cancelled => PermissionManagerDecision::Cancelled,
+        // Handle any future variants (non_exhaustive enum)
+        _ => PermissionManagerDecision::Cancelled,
+    }
+}
+
+/// Format a title for the permission dialog based on tool name and input
+fn format_tool_title(tool_name: &str, input: &serde_json::Value) -> String {
+    // Strip mcp__acp__ prefix for display
+    let display_name = tool_name.strip_prefix("mcp__acp__").unwrap_or(tool_name);
+
+    match display_name {
+        "Read" => {
+            let path = input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("file");
+            format!("Read {}", path)
+        }
+        "Write" => {
+            let path = input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("file");
+            format!("Write to {}", path)
+        }
+        "Edit" => {
+            let path = input
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("file");
+            format!("Edit {}", path)
+        }
+        "Bash" => {
+            let cmd = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let desc = input.get("description").and_then(|v| v.as_str());
+            desc.map(String::from)
+                .unwrap_or_else(|| format!("Run: {}", truncate_string(cmd, 50)))
+        }
+        _ => display_name.to_string(),
+    }
+}
+
+/// Truncate a string to max length, adding "..." if truncated
+fn truncate_string(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len.saturating_sub(3)])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_tool_title_read() {
+        let title = format_tool_title("Read", &serde_json::json!({"file_path": "/tmp/test.txt"}));
+        assert_eq!(title, "Read /tmp/test.txt");
+    }
+
+    #[test]
+    fn test_format_tool_title_edit() {
+        let title = format_tool_title("Edit", &serde_json::json!({"file_path": "/tmp/file.txt"}));
+        assert_eq!(title, "Edit /tmp/file.txt");
+    }
+
+    #[test]
+    fn test_format_tool_title_mcp_prefix() {
+        let title = format_tool_title(
+            "mcp__acp__Read",
+            &serde_json::json!({"file_path": "/tmp/test.txt"}),
+        );
+        assert_eq!(title, "Read /tmp/test.txt");
+    }
+
+    #[test]
+    fn test_truncate_string() {
+        assert_eq!(truncate_string("hello", 10), "hello");
+        assert_eq!(truncate_string("hello world", 8), "hello...");
+        assert_eq!(truncate_string("hi", 2), "hi");
+    }
+
+    #[test]
+    fn test_parse_permission_response_selected() {
+        // This would require constructing RequestPermissionOutcome
+        // For now, just verify the function compiles
+        let _ = parse_permission_response;
+    }
+}

@@ -57,8 +57,8 @@ impl SessionManager {
                 Err(AgentError::SessionAlreadyExists(session_id))
             }
             dashmap::Entry::Vacant(vacant) => {
-                let session = Session::new(session_id, cwd, config, meta)?;
-                let arc_session = Arc::new(session);
+                // Session::new() now directly returns Arc<Session>
+                let arc_session = Session::new(session_id, cwd, config, meta)?;
                 vacant.insert(Arc::clone(&arc_session));
                 Ok(arc_session)
             }
