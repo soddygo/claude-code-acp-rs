@@ -6,6 +6,7 @@
 //! - Message conversion between ACP and Claude SDK
 
 mod core;
+mod flush;
 mod handlers;
 mod runner;
 

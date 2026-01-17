@@ -4,9 +4,9 @@ version = 4
 
 [[package]]
 name = "agent-client-protocol-schema"
-version = "0.10.5"
+version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6903a00e8ac822f9bacac59a1932754d7387c72ebb7c9c7439ad021505591da4"
+checksum = "5a871245e59daecd6abf45f516d35445466294ae987dc685106e1676685bfdce"
 dependencies = [
  "anyhow",
  "derive_more",
@@ -276,7 +276,7 @@ checksum = "a1d728cc89cf3aee9ff92b05e62b19ee65a02b5702cff7d5a377e32c6ae29d8d"
 
 [[package]]
 name = "claude-code-acp-rs"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1713,8 +1713,7 @@ checksum = "a50f4cf475b65d88e057964e0e9bb1f0aa9bbb2036dc65c64596b42932536984"
 [[package]]
 name = "sacp"
 version = "10.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "704f40d3c269b30229c34093b658ec80c4fac103281654b3965249c592dd6fa6"
+source = "git+https://github.com/soddygo/symposium-acp.git?branch=main#776846b682c30ef85c9b8a410f974daac20de579"
 dependencies = [
  "agent-client-protocol-schema",
  "anyhow",
@@ -1738,8 +1737,7 @@ dependencies = [
 [[package]]
 name = "sacp-derive"
 version = "10.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92150f9246c01d501855e34469810a82adc27c416c8d8e21665567f8cd966f29"
+source = "git+https://github.com/soddygo/symposium-acp.git?branch=main#776846b682c30ef85c9b8a410f974daac20de579"
 dependencies = [
  "proc-macro2",
  "quote",

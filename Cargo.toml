@@ -1,6 +1,6 @@
 [package]
 name = "claude-code-acp-rs"
-version = "0.1.12"
+version = "0.1.13"
 authors = ["guochao.song <soddygo@qq.com>"]
 edition = "2024"
 rust-version = "1.90"
@@ -24,7 +24,8 @@ path = "src/main.rs"
 
 [dependencies]
 # ACP Protocol SDK (sacp re-exports agent-client-protocol-schema types via sacp::schema)
-# Using symposium-acp crates from crates.io
+# Using official symposium-acp from crates.io
+# NOTE: During development, patch is applied below to use fork with flush mechanism
 sacp = "10.1.0"
 
 # Claude Agent SDK
@@ -106,8 +107,13 @@ atty = "0.2"
 
 # OpenTelemetry (optional, for distributed tracing)
 opentelemetry = { version = "0.31", optional = true }
-opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"], optional = true }
-opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "http-proto"], optional = true }
+opentelemetry_sdk = { version = "0.31", features = [
+    "rt-tokio",
+], optional = true }
+opentelemetry-otlp = { version = "0.31", features = [
+    "grpc-tonic",
+    "http-proto",
+], optional = true }
 tracing-opentelemetry = { version = "0.32", optional = true }
 
 # MCP support (optional, for future use)
@@ -120,11 +126,41 @@ tempfile = "3"
 serial_test = "3"
 
 [features]
-default = ["otel"]
+default = ["otel", "sacp-flush"]
 # mcp = ["rmcp"]
-otel = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "tracing-opentelemetry"]
+otel = [
+    "opentelemetry",
+    "opentelemetry_sdk",
+    "opentelemetry-otlp",
+    "tracing-opentelemetry",
+]
+# Enable flush mechanism from patched sacp (enabled by default during development)
+# When using official sacp, disable this feature: --no-default-features
+sacp-flush = []
 # Enable verbose debug logging for troubleshooting
 verbose-debug = []
+
+# ============================================================================
+# Patch Configuration - Development Only
+# ============================================================================
+#
+# This patch section is used during development to use a fork of sacp with
+# the flush mechanism fix (MESSAGE_ORDERING_ISSUE.md).
+#
+# IMPORTANT: [patch] sections are NOT included when publishing to crates.io!
+# This means:
+#   - Development: Uses your fork with flush mechanism
+#   - Production/End users: Uses official sacp from crates.io
+#
+# When your PR is merged into official sacp, you can remove this section.
+#
+# Users who want the flush fix can add this to their Cargo.toml:
+#   [patch.crates-io]
+#   sacp = { git = "https://github.com/soddygo/symposium-acp.git", branch = "main" }
+#
+[patch.crates-io]
+# Patch sacp to use fork with flush mechanism during development
+sacp = { git = "https://github.com/soddygo/symposium-acp.git", branch = "main" }
 
 [lints.rust]
 future_incompatible = { level = "warn", priority = -1 }

@@ -22,6 +22,7 @@ use sacp::schema::{
 use tokio::sync::broadcast;
 use tracing::instrument;
 
+use crate::agent::flush;
 use crate::session::{PermissionMode, SessionManager};
 use crate::terminal::TerminalClient;
 use crate::types::{AgentConfig, AgentError, NewSessionMeta};
@@ -514,20 +515,28 @@ pub async fn handle_prompt(
         "Prompt completed"
     );
 
-    // Ensure all notifications are sent before returning EndTurn.
-    // This works around a race condition where EndTurn response can arrive
-    // before pending agent_message_chunk notifications are processed.
+    // ========================================================================
+    // CRITICAL: Flush pending notifications before returning EndTurn
+    // ========================================================================
     //
-    // The issue: send_notification() uses unbounded_send() which returns
-    // immediately, but the outgoing_protocol_actor processes messages
-    // asynchronously in the background.
+    // This fixes the message ordering issue described in MESSAGE_ORDERING_ISSUE.md
     //
-    // Solution: Wait based on the number of notifications sent.
-    // - More notifications = longer wait to ensure all are processed
-    // - Minimum 10ms for small notification counts
-    // - Maximum 100ms to avoid excessive delay
-    let wait_ms = (10 + notification_count.saturating_mul(2)).min(100);
-    tokio::time::sleep(tokio::time::Duration::from_millis(wait_ms)).await;
+    // The Problem:
+    // - send_notification() uses unbounded_send() which returns immediately
+    // - Messages are processed asynchronously by outgoing_protocol_actor
+    // - EndTurn response can arrive before notifications are sent
+    //
+    // The Solution:
+    // - When using patched sacp with flush mechanism: call flush() to wait
+    // - When using official sacp: fall back to sleep-based approximation
+    //
+    // IMPORTANT: This project uses a patch to your sacp fork during development
+    // which includes the flush mechanism. See: docs/PATCH_CONFIGURATION.md
+    //
+    // When your PR is merged to official sacp, this will use the native flush()
+    // method from the official library.
+    //
+    flush::ensure_notifications_flushed(&connection_cx, notification_count).await;
 
     // Determine stop reason based on session state and ResultMessage
     // Reference: vendors/claude-code-acp/src/acp-agent.ts lines 286-323
