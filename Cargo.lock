@@ -276,7 +276,7 @@ checksum = "a1d728cc89cf3aee9ff92b05e62b19ee65a02b5702cff7d5a377e32c6ae29d8d"
 
 [[package]]
 name = "claude-code-acp-rs"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -318,9 +318,9 @@ dependencies = [
 
 [[package]]
 name = "claude-code-agent-sdk"
-version = "0.1.24"
+version = "0.1.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4907e5afaeb44cf997d523cd8448e3fa039a74651f4bb170ea3b6e18766294b1"
+checksum = "524876e6c7046c4e3418edbe47cbb3f643c69075100a42041cf061b48283cd85"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -329,6 +329,7 @@ dependencies = [
  "paste",
  "path-absolutize",
  "pin-project",
+ "ringbuf",
  "serde",
  "serde_json",
  "thiserror",
@@ -1421,6 +1422,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
+name = "portable-atomic"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f89776e4d69bb58bc6993e99ffa1d11f228b839984854c7daeb5d37f87cbe950"
+
+[[package]]
+name = "portable-atomic-util"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
+dependencies = [
+ "portable-atomic",
+]
+
+[[package]]
 name = "potential_utf"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1639,6 +1655,17 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "ringbuf"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe47b720588c8702e34b5979cb3271a8b1842c7cb6f57408efa70c779363488c"
+dependencies = [
+ "crossbeam-utils",
+ "portable-atomic",
+ "portable-atomic-util",
 ]
 
 [[package]]

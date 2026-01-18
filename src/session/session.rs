@@ -295,6 +295,8 @@ impl Session {
             .mcp_servers(McpServers::Dict(mcp_servers_dict))
             .can_use_tool(can_use_tool_callback)
             .permission_mode(SdkPermissionMode::AcceptEdits)
+            // Using circular buffer (ringbuf) - auto-recycles old data, no need for large buffer
+            .max_buffer_size(20 * 1024 * 1024)  // 20MB 缓冲区
             .build();
 
         // Debug: Verify can_use_tool is set
