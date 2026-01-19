@@ -108,6 +108,10 @@ pub struct Session {
     /// can_use_tool callback uses this to get tool_use_id when CLI doesn't provide it
     /// Key: stable cache key of tool_input, Value: tool_use_id
     tool_use_id_cache: Arc<DashMap<String, String>>,
+    /// Whether this session has been cancelled by user
+    /// Set to true when cancel() is called, reset to false at start of new prompt
+    /// Used to distinguish user cancellation from execution errors
+    cancelled: AtomicBool,
 }
 
 /// Generate a stable cache key from JSON value
@@ -438,6 +442,7 @@ impl Session {
             cancel_sender: broadcast::channel(1).0,
             permission_cache,
             tool_use_id_cache,
+            cancelled: AtomicBool::new(false),
         };
 
         // Wrap in Arc
@@ -846,17 +851,20 @@ impl Session {
     /// Cancel this session and interrupt the Claude CLI
     ///
     /// This sends an interrupt signal to the Claude CLI to stop the current operation.
-    /// Note: This does NOT use a cancelled flag anymore - cancellation is handled
-    /// per-prompt via CancellationToken in the PromptManager.
+    /// Also sets the cancelled flag to true so that the stop reason can be determined correctly.
     #[instrument(
         name = "session_cancel",
         skip(self),
         fields(session_id = %self.session_id)
     )]
     pub async fn cancel(&self) {
+        // Set cancelled flag first
+        // Use Release ordering to ensure visibility to other threads
+        self.cancelled.store(true, Ordering::Release);
+
         tracing::info!(
             session_id = %self.session_id,
-            "Sending interrupt signal to Claude CLI"
+            "Sending interrupt signal to Claude CLI (cancelled=true)"
         );
 
         // Send interrupt signal to Claude CLI to stop current operation
@@ -879,6 +887,24 @@ impl Session {
                 "Could not acquire client lock for interrupt"
             );
         }
+    }
+
+    /// Check if session is cancelled by user
+    ///
+    /// This flag is set when the user clicks "Stop" in the UI.
+    /// Used to determine whether to return Cancelled or EndTurn stop reason.
+    pub fn is_user_cancelled(&self) -> bool {
+        // Use Acquire ordering to synchronize with the Release store in cancel()
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Reset the cancelled flag
+    ///
+    /// Called at the start of each new prompt to ensure the flag is cleared.
+    pub fn reset_cancelled(&self) {
+        // Use Release ordering for consistency, though Relaxed would also work here
+        // since we're just clearing the flag at the start of a new prompt
+        self.cancelled.store(false, Ordering::Release);
     }
 
     /// Get the permission handler
@@ -1086,6 +1112,46 @@ mod tests {
         assert_eq!(session.session_id, "test-session-1");
         assert_eq!(session.cwd, PathBuf::from("/tmp"));
         assert!(!session.is_connected());
+        // Cancelled flag should be false initially
+        assert!(!session.is_user_cancelled());
+    }
+
+    #[test]
+    fn test_cancelled_flag_lifecycle() {
+        let session = Session::new(
+            "test-cancel-session".to_string(),
+            PathBuf::from("/tmp"),
+            &test_config(),
+            None,
+        )
+        .unwrap();
+
+        // 1. Initially cancelled should be false
+        assert!(
+            !session.is_user_cancelled(),
+            "Cancelled should be false initially"
+        );
+
+        // 2. After setting cancelled to true via direct store (simulating cancel())
+        session.cancelled.store(true, Ordering::Release);
+        assert!(
+            session.is_user_cancelled(),
+            "Cancelled should be true after setting"
+        );
+
+        // 3. After reset_cancelled(), should be false again
+        session.reset_cancelled();
+        assert!(
+            !session.is_user_cancelled(),
+            "Cancelled should be false after reset"
+        );
+
+        // 4. Set again and verify
+        session.cancelled.store(true, Ordering::Release);
+        assert!(
+            session.is_user_cancelled(),
+            "Cancelled should be true after setting again"
+        );
     }
 
     #[tokio::test]

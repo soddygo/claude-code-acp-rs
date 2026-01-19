@@ -325,6 +325,10 @@ pub async fn handle_prompt(
     let session_id = request.session_id.0.as_ref();
     let session = sessions.get_session_or_error(session_id)?;
 
+    // Reset cancelled flag at the start of each prompt
+    // This ensures that cancelled state from previous prompt is cleared
+    session.reset_cancelled();
+
     tracing::info!(
         session_id = %session_id,
         prompt_blocks = request.prompt.len(),
@@ -615,6 +619,17 @@ pub async fn handle_prompt(
     }
 
     if let Some(ref result) = last_result {
+        // Check user cancelled flag first (set by session/cancel notification)
+        // This matches TypeScript behavior where cancelled flag is checked before result handling
+        if session.is_user_cancelled() {
+            tracing::info!(
+                session_id = %session_id,
+                subtype = %result.subtype,
+                "User cancelled session, returning Cancelled stop reason"
+            );
+            return Ok(PromptResponse::new(StopReason::Cancelled));
+        }
+
         // Check is_error first - TS throws error when is_error=true
         if result.is_error {
             let error_msg = result
@@ -647,15 +662,15 @@ pub async fn handle_prompt(
                 StopReason::EndTurn
             }
             "error_during_execution" => {
-                // Match TS behavior: return Refusal for error_during_execution
-                // This signals to the client that execution failed, preventing
-                // immediate retry while CLI internal state recovers
+                // Match TS behavior: error_during_execution with is_error=false returns EndTurn
+                // This indicates execution was interrupted but not due to an error
+                // User cancellation is already handled above by checking is_user_cancelled()
                 tracing::info!(
                     session_id = %session_id,
                     subtype = %result.subtype,
-                    "Returning Refusal for error_during_execution (CLI execution error)"
+                    "Returning EndTurn for error_during_execution (is_error=false)"
                 );
-                StopReason::Refusal
+                StopReason::EndTurn
             }
             "error_max_budget_usd" | "error_max_turns" | "error_max_structured_output_retries" => {
                 tracing::info!(
