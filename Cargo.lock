@@ -276,7 +276,7 @@ checksum = "a1d728cc89cf3aee9ff92b05e62b19ee65a02b5702cff7d5a377e32c6ae29d8d"
 
 [[package]]
 name = "claude-code-acp-rs"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -318,13 +318,15 @@ dependencies = [
 
 [[package]]
 name = "claude-code-agent-sdk"
-version = "0.1.29"
+version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6bc8ad346aff61eaeccee75705d58ffe86fc63cd502817bea3781a5501bd531"
+checksum = "d6fbf2f407a8f018e392930ee27c7c746565062ab71c7e168393a3a1d06501c3"
 dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "chrono",
+ "dashmap",
  "futures",
  "paste",
  "path-absolutize",
