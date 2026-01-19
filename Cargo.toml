@@ -32,7 +32,7 @@ sacp = "10.1.0"
 # 开发阶段：使用本地 SDK 路径依赖
 # claude-code-agent-sdk = { path = "vendors/claude-code-agent-sdk" }
 # 发布阶段：恢复为 crates.io 版本
-claude-code-agent-sdk = "0.1.29"
+claude-code-agent-sdk = "0.1.30"
 
 # Async runtime
 tokio = { version = "1.48", features = [
