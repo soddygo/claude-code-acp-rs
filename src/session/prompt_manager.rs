@@ -218,10 +218,10 @@ mod tests {
         // Create a task that waits for cancellation
         let handle = tokio::spawn(async move {
             tokio::select! {
-                _ = cancel_token_clone.cancelled() => {
+                () = cancel_token_clone.cancelled() => {
                     // Cancelled
                 }
-                _ = sleep(Duration::from_secs(10)) => {
+                () = sleep(Duration::from_secs(10)) => {
                     // Would timeout, but should be cancelled first
                 }
             }

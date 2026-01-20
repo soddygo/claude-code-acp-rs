@@ -284,7 +284,6 @@ dependencies = [
  "atty",
  "chrono",
  "clap",
- "claude-code-agent-sdk",
  "dashmap",
  "dirs",
  "futures",
@@ -314,31 +313,6 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "walkdir",
-]
-
-[[package]]
-name = "claude-code-agent-sdk"
-version = "0.1.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c173608bc45fb8f428096eb04159b7140d9f63b330712ac4002ac62452234ae1"
-dependencies = [
- "anyhow",
- "async-stream",
- "async-trait",
- "chrono",
- "dashmap",
- "futures",
- "paste",
- "path-absolutize",
- "pin-project",
- "ringbuf",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
- "typed-builder",
- "uuid",
 ]
 
 [[package]]
@@ -1356,34 +1330,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "paste"
-version = "1.0.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
-
-[[package]]
 name = "pastey"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b867cad97c0791bbd3aaa6472142568c6c9e8f71937e98379f584cfb0cf35bec"
-
-[[package]]
-name = "path-absolutize"
-version = "3.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4af381fe79fa195b4909485d99f73a80792331df0625188e707854f0b3383f5"
-dependencies = [
- "path-dedot",
-]
-
-[[package]]
-name = "path-dedot"
-version = "3.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07ba0ad7e047712414213ff67533e6dd477af0a4e1d14fb52343e53d30ea9397"
-dependencies = [
- "once_cell",
-]
 
 [[package]]
 name = "percent-encoding"
@@ -1422,21 +1372,6 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
-
-[[package]]
-name = "portable-atomic"
-version = "1.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f89776e4d69bb58bc6993e99ffa1d11f228b839984854c7daeb5d37f87cbe950"
-
-[[package]]
-name = "portable-atomic-util"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
-dependencies = [
- "portable-atomic",
-]
 
 [[package]]
 name = "potential_utf"
@@ -1657,17 +1592,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
-]
-
-[[package]]
-name = "ringbuf"
-version = "0.4.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe47b720588c8702e34b5979cb3271a8b1842c7cb6f57408efa70c779363488c"
-dependencies = [
- "crossbeam-utils",
- "portable-atomic",
- "portable-atomic-util",
 ]
 
 [[package]]
@@ -2344,26 +2268,6 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
-
-[[package]]
-name = "typed-builder"
-version = "0.23.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31aa81521b70f94402501d848ccc0ecaa8f93c8eb6999eb9747e72287757ffda"
-dependencies = [
- "typed-builder-macro",
-]
-
-[[package]]
-name = "typed-builder-macro"
-version = "0.23.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "076a02dc54dd46795c2e9c8282ed40bcfb1e22747e955de9389a1de28190fb26"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
 
 [[package]]
 name = "unicode-ident"

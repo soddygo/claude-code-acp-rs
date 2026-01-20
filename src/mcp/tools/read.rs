@@ -9,6 +9,11 @@ use serde_json::json;
 use super::base::{Tool, ToolKind};
 use crate::mcp::registry::{ToolContext, ToolResult};
 
+/// Maximum file size in bytes (100MB)
+const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
+/// Maximum output size in characters (for UTF-8 safe truncation)
+const MAX_OUTPUT_SIZE: usize = 50_000;
+
 /// Read tool for reading file contents
 #[derive(Debug, Default)]
 pub struct ReadTool;
@@ -30,6 +35,26 @@ impl ReadTool {
     /// Create a new Read tool instance
     pub fn new() -> Self {
         Self
+    }
+
+    /// Safely truncate string to maximum size, respecting UTF-8 character boundaries
+    fn safe_truncate(s: &mut String, max_len: usize) {
+        if s.len() > max_len {
+            // Handle edge case: max_len is 0
+            if max_len == 0 {
+                s.clear();
+                s.push_str("... (output truncated due to size)");
+                return;
+            }
+
+            // Find valid UTF-8 boundary
+            let mut truncate_at = max_len;
+            while truncate_at > 0 && !s.is_char_boundary(truncate_at) {
+                truncate_at -= 1;
+            }
+            s.truncate(truncate_at);
+            s.push_str("\n... (output truncated due to size)");
+        }
     }
 }
 
@@ -94,6 +119,26 @@ impl Tool for ReadTool {
         // Check if it's a file
         if !path.is_file() {
             return ToolResult::error(format!("Not a file: {}", path.display()));
+        }
+
+        // Check file size before reading
+        let metadata = match tokio::fs::metadata(&path).await {
+            Ok(m) => m,
+            Err(e) => {
+                return ToolResult::error(format!("Failed to get file metadata: {}", e));
+            }
+        };
+
+        let file_size = metadata.len();
+        if file_size > MAX_FILE_SIZE {
+            #[allow(clippy::cast_precision_loss)]
+            let file_size_mb = file_size as f64 / 1024.0 / 1024.0;
+            #[allow(clippy::cast_precision_loss)]
+            let max_file_size_mb = MAX_FILE_SIZE as f64 / 1024.0 / 1024.0;
+            return ToolResult::error(format!(
+                "File too large ({:.1}MB). Maximum supported size is {:.1}MB. Use offset/limit parameters to read portions of the file.",
+                file_size_mb, max_file_size_mb
+            ));
         }
 
         // Read file content with timing
@@ -173,7 +218,10 @@ impl Tool for ReadTool {
             "-".repeat(60)
         );
 
-        let result = format!("{}\n{}", header, selected_lines.join("\n"));
+        let mut result = format!("{}\n{}", header, selected_lines.join("\n"));
+
+        // Apply UTF-8 safe truncation if result is too large
+        Self::safe_truncate(&mut result, MAX_OUTPUT_SIZE);
 
         tracing::info!(
             file_path = %path.display(),

@@ -490,7 +490,7 @@ mod tests {
 
         assert_eq!(info.kind, ToolKind::Search);
         assert!(info.title.contains("List"));
-        assert!(info.title.contains("."));
+        assert!(info.title.contains('.'));
     }
 
     #[test]
@@ -840,6 +840,7 @@ mod tests {
         }
 
         let elapsed = start.elapsed();
+        #[allow(clippy::cast_sign_loss)]
         let per_iter_ns = elapsed.as_nanos() / iterations as u128;
 
         // Should be very fast (< 1000ns per iteration)
@@ -861,6 +862,7 @@ mod tests {
         }
 
         let elapsed = start.elapsed();
+        #[allow(clippy::cast_sign_loss)]
         let per_iter_ns = elapsed.as_nanos() / iterations as u128;
 
         // Should still be fast (< 2000ns per iteration)
@@ -883,6 +885,7 @@ mod tests {
         }
 
         let elapsed = start.elapsed();
+        #[allow(clippy::cast_sign_loss)]
         let per_iter_ns = elapsed.as_nanos() / iterations as u128;
 
         // Longer paths may be slower but still should be reasonable

@@ -80,6 +80,26 @@ impl BashTool {
         Self
     }
 
+    /// Safely truncate string to maximum size, respecting UTF-8 character boundaries
+    fn safe_truncate(s: &mut String, max_len: usize) {
+        if s.len() > max_len {
+            // Handle edge case: max_len is 0
+            if max_len == 0 {
+                s.clear();
+                s.push_str("... (output truncated)");
+                return;
+            }
+
+            // Find valid UTF-8 boundary
+            let mut truncate_at = max_len;
+            while truncate_at > 0 && !s.is_char_boundary(truncate_at) {
+                truncate_at -= 1;
+            }
+            s.truncate(truncate_at);
+            s.push_str("\n... (output truncated)");
+        }
+    }
+
     /// Check permission before executing the tool
     ///
     /// Note: Permission checking is now handled at the SDK level.
@@ -262,12 +282,9 @@ impl BashTool {
             result_text.push_str(&stderr);
         }
 
-        // Truncate if too long
+        // Truncate if too long (using UTF-8 safe truncation)
         let was_truncated = result_text.len() > MAX_OUTPUT_SIZE;
-        if was_truncated {
-            result_text.truncate(MAX_OUTPUT_SIZE);
-            result_text.push_str("\n... (output truncated)");
-        }
+        Self::safe_truncate(&mut result_text, MAX_OUTPUT_SIZE);
 
         // Handle empty output
         if result_text.is_empty() {
@@ -511,15 +528,16 @@ impl BashTool {
                 // exit_code is Option<u32>, convert to i32 for compatibility
                 #[allow(clippy::cast_possible_wrap)]
                 let exit_code = exit_status.exit_code.map(|c| c as i32).unwrap_or(-1);
-                let was_truncated = output.len() >= MAX_OUTPUT_SIZE;
 
-                let result_text = if output.is_empty() {
+                // Apply UTF-8 safe truncation if needed
+                let mut result_text = if output.is_empty() {
                     "(no output)".to_string()
-                } else if was_truncated {
-                    format!("{}\n... (output truncated)", output)
                 } else {
                     output
                 };
+
+                let was_truncated = result_text.len() > MAX_OUTPUT_SIZE;
+                Self::safe_truncate(&mut result_text, MAX_OUTPUT_SIZE);
 
                 if exit_code == 0 {
                     ToolResult::success(result_text).with_metadata(json!({

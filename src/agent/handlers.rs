@@ -15,7 +15,7 @@ use sacp::JrConnectionCx;
 use sacp::link::AgentToClient;
 use tokio_util::sync::CancellationToken;
 use sacp::schema::{
-    AgentCapabilities, AvailableCommandsUpdate, ContentBlock, CurrentModeUpdate, Implementation,
+    AgentCapabilities, ContentBlock, CurrentModeUpdate, Implementation,
     InitializeRequest, InitializeResponse, LoadSessionRequest, LoadSessionResponse,
     NewSessionRequest, NewSessionResponse, PromptCapabilities, PromptRequest, PromptResponse,
     SessionId, SessionMode, SessionModeId, SessionModeState, SessionNotification, SessionUpdate,
@@ -82,6 +82,7 @@ pub fn handle_initialize(request: InitializeRequest, _config: &AgentConfig) -> I
         mcp_server_count = request.mcp_servers.len(),
     )
 )]
+#[allow(unused_variables)]
 pub async fn handle_new_session(
     request: NewSessionRequest,
     config: &AgentConfig,
@@ -264,6 +265,9 @@ fn build_available_modes() -> Vec<SessionMode> {
 /// Send available commands update to client
 ///
 /// Sends the list of available slash commands to the client via ACP notification.
+#[allow(dead_code)]
+#[allow(unused_variables)]
+#[allow(clippy::unnecessary_wraps)]
 fn send_available_commands_update(
     session_id: &str,
     connection_cx: JrConnectionCx<AgentToClient>,
@@ -273,6 +277,7 @@ fn send_available_commands_update(
 
     #[cfg(not(test))]
     {
+        use sacp::schema::AvailableCommandsUpdate;
         let notification = SessionNotification::new(
             SessionId::new(session_id.to_string()),
             SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(commands)),

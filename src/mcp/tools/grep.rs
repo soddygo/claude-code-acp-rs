@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::process::Stdio;
 use tokio::process::Command;
+use tokio::time::{timeout, Duration};
 
 use super::base::Tool;
 use crate::mcp::registry::{ToolContext, ToolResult};
@@ -83,12 +84,47 @@ struct GrepInput {
     /// Skip first N entries
     #[serde(default)]
     offset: Option<usize>,
+    /// Timeout in milliseconds
+    #[serde(default)]
+    timeout: Option<u64>,
 }
 
 impl GrepTool {
     /// Create a new Grep tool instance
     pub fn new() -> Self {
         Self
+    }
+
+    /// Process output with offset and head_limit using streaming approach
+    /// Returns (processed_output, was_truncated)
+    fn process_output_with_limits(
+        stdout: &str,
+        offset: usize,
+        head_limit: usize,
+    ) -> (String, bool) {
+        let mut output = String::new();
+        let mut was_truncated = false;
+
+        // Use skip() to efficiently skip offset lines, enumerate() for counting
+        for (collected, line) in stdout.lines().skip(offset).enumerate() {
+            if collected >= head_limit {
+                was_truncated = true;
+                break;
+            }
+
+            // Check if adding this line would exceed MAX_OUTPUT_SIZE
+            if output.len() + line.len() + 1 > MAX_OUTPUT_SIZE {
+                was_truncated = true;
+                break;
+            }
+
+            if !output.is_empty() {
+                output.push('\n');
+            }
+            output.push_str(line);
+        }
+
+        (output, was_truncated)
     }
 
     /// Build rg command arguments
@@ -226,6 +262,10 @@ impl Tool for GrepTool {
                 "offset": {
                     "type": "integer",
                     "description": "Skip first N entries"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Optional timeout in milliseconds (no timeout by default)"
                 }
             }
         })
@@ -261,23 +301,45 @@ impl Tool for GrepTool {
         // Build command arguments
         let args = self.build_args(&params, &search_path, mode);
 
-        // Execute ripgrep
+        // Execute ripgrep with optional timeout
         let mut cmd = Command::new("rg");
         cmd.args(&args)
             .current_dir(&context.cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        let output = match cmd.output().await {
-            Ok(o) => o,
-            Err(e) => {
-                // Check if rg is not installed
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    return ToolResult::error(
-                        "ripgrep (rg) not found. Please install ripgrep to use Grep tool.",
-                    );
+        let output = if let Some(timeout_ms) = params.timeout {
+            let timeout_duration = Duration::from_millis(timeout_ms);
+            match timeout(timeout_duration, cmd.output()).await {
+                Ok(Ok(o)) => o,
+                Ok(Err(e)) => {
+                    // Check if rg is not installed
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        return ToolResult::error(
+                            "ripgrep (rg) not found. Please install ripgrep to use Grep tool.",
+                        );
+                    }
+                    return ToolResult::error(format!("Failed to execute ripgrep: {}", e));
                 }
-                return ToolResult::error(format!("Failed to execute ripgrep: {}", e));
+                Err(_) => {
+                    return ToolResult::error(format!(
+                        "Search timed out after {}ms. Try narrowing your search pattern, path, or increase the timeout value.",
+                        timeout_ms
+                    ));
+                }
+            }
+        } else {
+            match cmd.output().await {
+                Ok(o) => o,
+                Err(e) => {
+                    // Check if rg is not installed
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        return ToolResult::error(
+                            "ripgrep (rg) not found. Please install ripgrep to use Grep tool.",
+                        );
+                    }
+                    return ToolResult::error(format!("Failed to execute ripgrep: {}", e));
+                }
             }
         };
 
@@ -288,39 +350,27 @@ impl Tool for GrepTool {
         // Handle exit codes
         // rg exits with 0 for matches, 1 for no matches, 2 for errors
         if let Some(0 | 1) = output.status.code() {
-            // Success or no matches
-            let mut lines: Vec<&str> = stdout.lines().collect();
-
-            // Apply offset and head_limit
+            // Apply offset and head_limit using streaming processing
             let offset = params.offset.unwrap_or(0);
             let head_limit = params.head_limit.unwrap_or(DEFAULT_HEAD_LIMIT);
 
-            if offset > 0 {
-                lines = lines.into_iter().skip(offset).collect();
-            }
+            let (result, was_truncated) = Self::process_output_with_limits(&stdout, offset, head_limit);
 
-            let truncated = lines.len() > head_limit;
-            lines.truncate(head_limit);
-
-            let result = if lines.is_empty() {
+            // Build final result
+            let result = if result.is_empty() {
                 format!(
                     "No matches found for pattern '{}' in {}",
                     params.pattern, search_path
                 )
             } else {
-                let mut output = lines.join("\n");
-
-                // Truncate if too long
-                if output.len() > MAX_OUTPUT_SIZE {
-                    output.truncate(MAX_OUTPUT_SIZE);
-                    output.push_str("\n... (output truncated due to size)");
-                } else if truncated {
+                let mut output = result;
+                // Add truncation notice if applicable
+                if was_truncated {
                     output.push_str(&format!(
                         "\n... (showing {} results, use head_limit to see more)",
                         head_limit
                     ));
                 }
-
                 output
             };
 
@@ -328,7 +378,7 @@ impl Tool for GrepTool {
                 "pattern": params.pattern,
                 "path": search_path,
                 "mode": format!("{:?}", mode),
-                "truncated": truncated
+                "truncated": was_truncated
             }))
         } else {
             // Error

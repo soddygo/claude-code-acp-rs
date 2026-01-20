@@ -1752,13 +1752,13 @@ mod tests {
         let barrier1 = barrier.clone();
         let handle1 = tokio::spawn(async move {
             barrier1.wait().await;
-            let _ = server1
+            drop(server1
                 .execute_tool(
                     "Read",
                     serde_json::json!({"file_path": "/tmp/test.txt"}),
                     Some("tool-1"),
                 )
-                .await;
+                .await);
         });
 
         // Task 2: Execute Bash tool (uses execute_bash_tool)
@@ -1766,13 +1766,13 @@ mod tests {
         let barrier2 = barrier.clone();
         let handle2 = tokio::spawn(async move {
             barrier2.wait().await;
-            let _ = server2
+            drop(server2
                 .execute_tool(
                     "Bash",
                     serde_json::json!({"command": "echo test"}),
                     Some("tool-2"),
                 )
-                .await;
+                .await);
         });
 
         // Task 3: Another Read tool
@@ -1780,13 +1780,13 @@ mod tests {
         let barrier3 = barrier.clone();
         let handle3 = tokio::spawn(async move {
             barrier3.wait().await;
-            let _ = server3
+            drop(server3
                 .execute_tool(
                     "Read",
                     serde_json::json!({"file_path": "/tmp/test.txt"}),
                     Some("tool-3"),
                 )
-                .await;
+                .await);
         });
 
         handles.push(handle1);
@@ -1799,7 +1799,7 @@ mod tests {
 
         for handle in handles {
             tokio::select! {
-                _ = tokio::time::sleep(timeout_duration) => {
+                () = tokio::time::sleep(timeout_duration) => {
                     panic!("Test timed out - likely deadlock detected!");
                 }
                 result = handle => {

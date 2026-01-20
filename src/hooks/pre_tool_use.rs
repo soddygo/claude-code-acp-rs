@@ -1110,10 +1110,10 @@ mod tests {
     #[tokio::test]
     async fn test_empty_tool_name_handling() {
         // Test that empty tool_name is handled gracefully
-        let connection_cx_lock: Arc<OnceLock<JrConnectionCx<AgentToClient>>> =
+        let _connection_cx_lock: Arc<OnceLock<JrConnectionCx<AgentToClient>>> =
             Arc::new(OnceLock::new());
-        let permission_cache: Arc<DashMap<String, bool>> = Arc::new(DashMap::new());
-        let tool_use_id_cache: Arc<DashMap<String, String>> = Arc::new(DashMap::new());
+        let _permission_cache: Arc<DashMap<String, bool>> = Arc::new(DashMap::new());
+        let _tool_use_id_cache: Arc<DashMap<String, String>> = Arc::new(DashMap::new());
 
         // Test with empty tool_name - should not panic and should use fallback
         let empty_tool_name = "";
@@ -1121,19 +1121,19 @@ mod tests {
         assert!(result.contains("Tool  denied"), "Empty tool_name produces double space");
 
         // Test the fallback logic
-        let display_name = if !empty_tool_name.is_empty() {
-            empty_tool_name
-        } else {
+        let display_name = if empty_tool_name.is_empty() {
             "the requested tool"
+        } else {
+            empty_tool_name
         };
         assert_eq!(display_name, "the requested tool");
 
         // Test with normal tool_name
         let normal_tool_name = "Write";
-        let display_name2 = if !normal_tool_name.is_empty() {
-            normal_tool_name
-        } else {
+        let display_name2 = if normal_tool_name.is_empty() {
             "the requested tool"
+        } else {
+            normal_tool_name
         };
         assert_eq!(display_name2, "Write");
     }

@@ -447,7 +447,7 @@ mod tests {
 
         // Test with empty string (edge case)
         let config = AgentConfig {
-            api_key: Some("".to_string()),
+            api_key: Some(String::new()),
             ..Default::default()
         };
         assert_eq!(config.masked_api_key().unwrap(), "***");

@@ -27,6 +27,12 @@ struct GlobInput {
     /// The directory to search in (defaults to cwd)
     #[serde(default)]
     path: Option<String>,
+    /// Limit output to first N results
+    #[serde(default)]
+    head_limit: Option<usize>,
+    /// Skip first N results
+    #[serde(default)]
+    offset: Option<usize>,
 }
 
 impl GlobTool {
@@ -59,6 +65,14 @@ impl Tool for GlobTool {
                 "path": {
                     "type": "string",
                     "description": "The directory to search in. If not specified, the current working directory will be used."
+                },
+                "head_limit": {
+                    "type": "integer",
+                    "description": "Limit output to first N results (default: 1000)"
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Skip first N results (default: 0)"
                 }
             }
         })
@@ -109,6 +123,13 @@ impl Tool for GlobTool {
         // Collect matching files with modification times
         let mut matches: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
 
+        // Determine the head_limit for collection
+        let collection_limit = params.head_limit.unwrap_or(MAX_RESULTS);
+        let offset = params.offset.unwrap_or(0);
+        // We need to collect more than offset + head_limit to account for filtering
+        // Use a 3x multiplier to handle cases where many entries are filtered (directories, non-matching files)
+        let total_to_collect = offset.saturating_add(collection_limit).saturating_mul(3).min(MAX_RESULTS * 3);
+
         for entry in WalkDir::new(&search_dir)
             .follow_links(false)
             .into_iter()
@@ -137,8 +158,8 @@ impl Tool for GlobTool {
 
                 matches.push((path.to_path_buf(), mtime));
 
-                // Limit results
-                if matches.len() >= MAX_RESULTS {
+                // Limit results for collection
+                if matches.len() >= total_to_collect {
                     break;
                 }
             }
@@ -147,32 +168,39 @@ impl Tool for GlobTool {
         // Sort by modification time (most recent first)
         matches.sort_by(|a, b| b.1.cmp(&a.1));
 
-        // Format output
-        let result_count = matches.len();
-        let truncated = result_count >= MAX_RESULTS;
+        // Apply offset and head_limit
+        let total_found = matches.len();
+        let was_truncated = total_found >= total_to_collect;
 
         let file_list: Vec<String> = matches
             .into_iter()
+            .skip(offset)
+            .take(collection_limit)
             .map(|(path, _)| path.display().to_string())
             .collect();
+
+        let returned_count = file_list.len();
 
         let output = if file_list.is_empty() {
             format!("No files matching pattern '{}' found.", params.pattern)
         } else {
             let mut result = file_list.join("\n");
-            if truncated {
+            if was_truncated {
                 result.push_str(&format!(
-                    "\n\n... (truncated, showing {} of possibly more results)",
-                    result_count
+                    "\n\n... (showing {} results, use head_limit to see more)",
+                    returned_count
                 ));
             }
             result
         };
 
         ToolResult::success(output).with_metadata(json!({
-            "count": result_count,
-            "truncated": truncated,
-            "pattern": params.pattern
+            "count": returned_count,
+            "total_found": total_found,
+            "truncated": was_truncated,
+            "pattern": params.pattern,
+            "offset": offset,
+            "head_limit": collection_limit
         }))
     }
 }

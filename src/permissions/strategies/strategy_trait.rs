@@ -43,8 +43,6 @@ pub trait PermissionModeStrategy: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Trait is tested through implementing strategies
     // See individual strategy tests for details
 }
