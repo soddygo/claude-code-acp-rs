@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use tracing::instrument;
 
 use crate::types::{AgentConfig, AgentError, NewSessionMeta, Result};
 
@@ -81,6 +82,22 @@ impl SessionManager {
         self.sessions.remove(session_id).map(|(_, v)| v)
     }
 
+    /// Remove a session and cleanup its resources
+    ///
+    /// This properly cleans up all child processes (MCP servers, bash processes)
+    /// to prevent zombie processes.
+    #[instrument(
+        name = "manager_remove_and_cleanup",
+        skip(self),
+        fields(session_id = %session_id)
+    )]
+    pub async fn remove_and_cleanup(&self, session_id: &str) -> Result<()> {
+        if let Some(session) = self.remove_session(session_id) {
+            session.cleanup().await?;
+        }
+        Ok(())
+    }
+
     /// Check if a session exists
     pub fn has_session(&self, session_id: &str) -> bool {
         self.sessions.contains_key(session_id)
@@ -96,9 +113,19 @@ impl SessionManager {
         self.sessions.iter().map(|r| r.key().clone()).collect()
     }
 
-    /// Clear all sessions
-    pub fn clear(&self) {
-        self.sessions.clear();
+    /// Clear all sessions with cleanup
+    ///
+    /// This properly cleans up all child processes for all sessions
+    /// to prevent zombie processes.
+    #[instrument(
+        name = "manager_clear",
+        skip(self),
+    )]
+    pub async fn clear(&self) {
+        let session_ids = self.session_ids();
+        for session_id in session_ids {
+            drop(self.remove_and_cleanup(&session_id).await);
+        }
     }
 
     /// Execute a function on a session if it exists
@@ -271,8 +298,8 @@ mod tests {
         assert!(ids.contains(&"session-2".to_string()));
     }
 
-    #[test]
-    fn test_manager_clear() {
+    #[tokio::test]
+    async fn test_manager_clear() {
         let manager = SessionManager::new();
         let config = test_config();
 
@@ -295,7 +322,7 @@ mod tests {
 
         assert_eq!(manager.session_count(), 2);
 
-        manager.clear();
+        manager.clear().await;
         assert_eq!(manager.session_count(), 0);
     }
 
@@ -319,5 +346,50 @@ mod tests {
 
         let missing = manager.with_session("nonexistent", |_| "found");
         assert!(missing.is_none());
+    }
+
+    /// Test remove_and_cleanup() properly cleans up sessions
+    ///
+    /// Verifies that remove_and_cleanup() removes the session
+    /// and calls its cleanup method.
+    #[tokio::test]
+    async fn test_manager_remove_and_cleanup() {
+        let manager = SessionManager::new();
+        let config = test_config();
+
+        // Create a session
+        manager
+            .create_session(
+                "session-cleanup-test".to_string(),
+                PathBuf::from("/tmp"),
+                &config,
+                None,
+            )
+            .unwrap();
+
+        // Verify session exists
+        assert_eq!(manager.session_count(), 1);
+        assert!(manager.has_session("session-cleanup-test"));
+
+        // Remove and cleanup should succeed
+        let result = manager.remove_and_cleanup("session-cleanup-test").await;
+        assert!(result.is_ok(), "remove_and_cleanup should succeed");
+
+        // Verify session is removed
+        assert!(!manager.has_session("session-cleanup-test"));
+        assert_eq!(manager.session_count(), 0);
+    }
+
+    /// Test remove_and_cleanup() with non-existent session
+    ///
+    /// Verifies that remove_and_cleanup() handles non-existent
+    /// sessions gracefully without error.
+    #[tokio::test]
+    async fn test_manager_remove_and_cleanup_nonexistent() {
+        let manager = SessionManager::new();
+
+        // Removing non-existent session should succeed (idempotent)
+        let result = manager.remove_and_cleanup("nonexistent-session").await;
+        assert!(result.is_ok(), "Removing non-existent session should be OK");
     }
 }

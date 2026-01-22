@@ -7,6 +7,7 @@
 use clap::Parser;
 use claude_code_acp::{cli::Cli, run_acp_with_cli, shutdown_otel};
 use tokio::signal;
+use std::io::IsTerminal;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -44,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("Error: {}", e);
 
         // If running in interactive mode, show more details
-        if atty::is(atty::Stream::Stdin) {
+        if std::io::stdin().is_terminal() {
             eprintln!("\nFor debugging, run with --diagnostic to log to a file.");
             eprintln!("Or use -v/-vv/-vvv for more verbose logging.");
         }

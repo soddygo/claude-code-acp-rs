@@ -2,6 +2,7 @@
 //!
 //! Entry point for running the Claude ACP Agent.
 
+use std::io::IsTerminal;
 use std::sync::Arc;
 
 use sacp::link::AgentToClient;
@@ -355,7 +356,7 @@ async fn run_acp_server() -> Result<(), sacp::Error> {
     let server_start_time = std::time::Instant::now();
 
     // Check if running in interactive terminal (for debugging)
-    let is_tty = atty::is(atty::Stream::Stdin);
+    let is_tty = std::io::stdin().is_terminal();
 
     // Print startup banner for easy log identification
     let agent_session_id = uuid::Uuid::new_v4();

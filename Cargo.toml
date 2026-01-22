@@ -105,9 +105,6 @@ chrono = "0.4"
 notify = "8"
 notify-debouncer-mini = "0.7"
 
-# TTY detection
-atty = "0.2"
-
 # OpenTelemetry (optional, for distributed tracing)
 opentelemetry = { version = "0.31", optional = true }
 opentelemetry_sdk = { version = "0.31", features = [
