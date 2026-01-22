@@ -74,8 +74,8 @@ pub struct Session {
     permission: Arc<RwLock<PermissionHandler>>,
     /// Token usage tracker
     usage_tracker: UsageTracker,
-    /// Notification converter with tool use cache
-    converter: NotificationConverter,
+    /// Notification converter with tool use cache (wrapped for interior mutability)
+    converter: RwLock<NotificationConverter>,
     /// Whether the client is connected
     connected: AtomicBool,
     /// Hook callback registry for PostToolUse callbacks
@@ -429,7 +429,7 @@ impl Session {
             client: RwLock::new(client),
             permission: permission_handler,
             usage_tracker: UsageTracker::new(),
-            converter: NotificationConverter::with_cwd(cwd_for_converter),
+            converter: RwLock::new(NotificationConverter::with_cwd(cwd_for_converter)),
             connected: AtomicBool::new(false),
             hook_callback_registry,
             permission_checker,
@@ -1000,9 +1000,29 @@ impl Session {
         &self.usage_tracker
     }
 
-    /// Get the notification converter
-    pub fn converter(&self) -> &NotificationConverter {
-        &self.converter
+    /// Get the notification converter (read-only access)
+    pub async fn converter(&self) -> tokio::sync::RwLockReadGuard<'_, NotificationConverter> {
+        self.converter.read().await
+    }
+
+    /// Set the request_id on the notification converter
+    ///
+    /// This will attach the request_id to all SessionNotification instances
+    /// created by this session's converter, allowing clients to track which
+    /// responses correspond to which requests.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_id` - The unique request identifier
+    pub async fn set_converter_request_id(&self, request_id: String) {
+        let mut converter = self.converter.write().await;
+        converter.set_request_id(request_id);
+    }
+
+    /// Clear the request_id from the notification converter
+    pub async fn clear_converter_request_id(&self) {
+        let mut converter = self.converter.write().await;
+        converter.clear_request_id();
     }
 
     /// Get the hook callback registry

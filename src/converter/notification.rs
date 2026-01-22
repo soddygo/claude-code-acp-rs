@@ -76,6 +76,8 @@ pub struct NotificationConverter {
     tool_use_cache: DashMap<String, ToolUseEntry>,
     /// Current working directory for relative path display
     cwd: Option<std::path::PathBuf>,
+    /// Optional request_id for tracking prompt requests
+    request_id: Option<String>,
 }
 
 impl Default for NotificationConverter {
@@ -90,6 +92,7 @@ impl NotificationConverter {
         Self {
             tool_use_cache: DashMap::new(),
             cwd: None,
+            request_id: None,
         }
     }
 
@@ -102,6 +105,37 @@ impl NotificationConverter {
         Self {
             tool_use_cache: DashMap::new(),
             cwd: Some(cwd),
+            request_id: None,
+        }
+    }
+
+    /// Set the request_id for this converter
+    ///
+    /// The request_id will be attached to all SessionNotification instances
+    /// created by this converter, allowing clients to track which responses
+    /// correspond to which requests.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_id` - The unique request identifier
+    pub fn set_request_id(&mut self, request_id: String) {
+        self.request_id = Some(request_id);
+    }
+
+    /// Clear the request_id
+    pub fn clear_request_id(&mut self) {
+        self.request_id = None;
+    }
+
+    /// Attach request_id to a notification if one is set
+    fn attach_request_id(&self, notification: SessionNotification) -> SessionNotification {
+        if let Some(ref req_id) = self.request_id {
+            // Build Meta (serde_json::Map) with request_id
+            let mut meta = serde_json::Map::new();
+            meta.insert("request_id".to_string(), serde_json::json!(req_id));
+            notification.meta(meta)
+        } else {
+            notification
         }
     }
 
@@ -439,23 +473,25 @@ impl NotificationConverter {
     #[allow(dead_code, clippy::unused_self)]
     fn make_agent_message(&self, session_id: &SessionId, text: &str) -> SessionNotification {
         // Use AgentMessageChunk since there's no AgentMessage variant
-        SessionNotification::new(
+        let notification = SessionNotification::new(
             session_id.clone(),
             SessionUpdate::AgentMessageChunk(ContentChunk::new(AcpContentBlock::Text(
                 TextContent::new(text),
             ))),
-        )
+        );
+        self.attach_request_id(notification)
     }
 
     /// Make an agent message chunk notification (incremental)
     #[allow(clippy::unused_self)]
     fn make_agent_message_chunk(&self, session_id: &SessionId, chunk: &str) -> SessionNotification {
-        SessionNotification::new(
+        let notification = SessionNotification::new(
             session_id.clone(),
             SessionUpdate::AgentMessageChunk(ContentChunk::new(AcpContentBlock::Text(
                 TextContent::new(chunk),
             ))),
-        )
+        );
+        self.attach_request_id(notification)
     }
 
     /// Make an agent thought notification (full thought as chunk)
@@ -465,23 +501,25 @@ impl NotificationConverter {
     #[allow(dead_code, clippy::unused_self)]
     fn make_agent_thought(&self, session_id: &SessionId, thought: &str) -> SessionNotification {
         // Use AgentThoughtChunk since there's no separate thought variant
-        SessionNotification::new(
+        let notification = SessionNotification::new(
             session_id.clone(),
             SessionUpdate::AgentThoughtChunk(ContentChunk::new(AcpContentBlock::Text(
                 TextContent::new(thought),
             ))),
-        )
+        );
+        self.attach_request_id(notification)
     }
 
     /// Make an agent thought chunk notification (incremental)
     #[allow(clippy::unused_self)]
     fn make_agent_thought_chunk(&self, session_id: &SessionId, chunk: &str) -> SessionNotification {
-        SessionNotification::new(
+        let notification = SessionNotification::new(
             session_id.clone(),
             SessionUpdate::AgentThoughtChunk(ContentChunk::new(AcpContentBlock::Text(
                 TextContent::new(chunk),
             ))),
-        )
+        );
+        self.attach_request_id(notification)
     }
 
     /// Make an image message notification
@@ -506,12 +544,13 @@ impl NotificationConverter {
 
         let image_content = ImageContent::new(data, mime_type).uri(uri);
 
-        SessionNotification::new(
+        let notification = SessionNotification::new(
             session_id.clone(),
             SessionUpdate::AgentMessageChunk(ContentChunk::new(AcpContentBlock::Image(
                 image_content,
             ))),
-        )
+        );
+        self.attach_request_id(notification)
     }
 
     /// Map local ToolKind to ACP ToolKind
@@ -592,7 +631,8 @@ impl NotificationConverter {
             tool_call = tool_call.locations(acp_locations);
         }
 
-        SessionNotification::new(session_id.clone(), SessionUpdate::ToolCall(tool_call))
+        let notification = SessionNotification::new(session_id.clone(), SessionUpdate::ToolCall(tool_call));
+        self.attach_request_id(notification)
     }
 
     /// Make tool result notifications
@@ -656,10 +696,11 @@ impl NotificationConverter {
             .raw_output(raw_output);
         let update = ToolCallUpdate::new(tool_call_id, update_fields);
 
-        let notifications = vec![SessionNotification::new(
+        let notification = SessionNotification::new(
             session_id.clone(),
             SessionUpdate::ToolCallUpdate(update),
-        )];
+        );
+        let notifications = vec![self.attach_request_id(notification)];
 
         // Note: Plan notification for TodoWrite is now sent at tool_use time
         // (in make_plan_from_todo_write), so we don't send it here anymore.
@@ -705,10 +746,11 @@ impl NotificationConverter {
         }
 
         let plan = Plan::new(plan_entries);
-        Some(SessionNotification::new(
+        let notification = SessionNotification::new(
             session_id.clone(),
             SessionUpdate::Plan(plan),
-        ))
+        );
+        Some(self.attach_request_id(notification))
     }
 
     /// Build tool result content based on tool type
@@ -842,7 +884,8 @@ impl NotificationConverter {
             .content(vec![terminal_content]);
         let update = ToolCallUpdate::new(tool_call_id, update_fields);
 
-        SessionNotification::new(session_id.clone(), SessionUpdate::ToolCallUpdate(update))
+        let notification = SessionNotification::new(session_id.clone(), SessionUpdate::ToolCallUpdate(update));
+        self.attach_request_id(notification)
     }
 }
 
@@ -1091,5 +1134,116 @@ mod tests {
         } else {
             panic!("Expected ToolCallUpdate");
         }
+    }
+
+    #[test]
+    fn test_request_id_propagation() {
+        let mut converter = NotificationConverter::new();
+        let session_id = SessionId::new("session-1");
+
+        // Without request_id, notification should not have meta
+        let notification = converter.make_agent_message_chunk(&session_id, "test");
+        assert!(notification.meta.is_none());
+
+        // Set request_id
+        converter.set_request_id("req-123".to_string());
+
+        // Now notifications should have request_id in meta
+        let notification = converter.make_agent_message_chunk(&session_id, "test");
+        assert!(notification.meta.is_some());
+        if let Some(meta) = &notification.meta {
+            assert_eq!(
+                meta.get("request_id"),
+                Some(&serde_json::json!("req-123"))
+            );
+        }
+    }
+
+    #[test]
+    fn test_request_id_clear() {
+        let mut converter = NotificationConverter::new();
+        let session_id = SessionId::new("session-1");
+
+        // Set request_id
+        converter.set_request_id("req-456".to_string());
+        let notification = converter.make_agent_message_chunk(&session_id, "test");
+        assert!(notification.meta.is_some());
+
+        // Clear request_id
+        converter.clear_request_id();
+        let notification = converter.make_agent_message_chunk(&session_id, "test");
+        assert!(notification.meta.is_none());
+    }
+
+    #[test]
+    fn test_request_id_propagation_all_notification_types() {
+        let mut converter = NotificationConverter::new();
+        let session_id = SessionId::new("session-1");
+
+        // Set request_id
+        let test_request_id = "test-req-789";
+        converter.set_request_id(test_request_id.to_string());
+
+        // Verify all notification types include request_id
+        let notifications = vec![
+            converter.make_agent_message_chunk(&session_id, "test"),
+            converter.make_agent_thought_chunk(&session_id, "thinking"),
+            converter.make_tool_call(&session_id, &ToolUseBlock {
+                id: "tool-1".to_string(),
+                name: "TestTool".to_string(),
+                input: serde_json::json!({}),
+            }),
+        ];
+
+        for notification in notifications {
+            assert!(
+                notification.meta.is_some(),
+                "Notification should have meta when request_id is set"
+            );
+            if let Some(meta) = &notification.meta {
+                assert_eq!(
+                    meta.get("request_id"),
+                    Some(&serde_json::json!(test_request_id)),
+                    "Meta should contain the correct request_id"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_request_id_with_converter_with_cwd() {
+        let mut converter = NotificationConverter::with_cwd(std::path::PathBuf::from("/test"));
+        let session_id = SessionId::new("session-1");
+
+        // Initially no request_id
+        let notification = converter.make_agent_message_chunk(&session_id, "test");
+        assert!(notification.meta.is_none());
+
+        // Set request_id
+        converter.set_request_id("req-cwd-test".to_string());
+
+        // Now should have request_id
+        let notification = converter.make_agent_message_chunk(&session_id, "test");
+        assert!(notification.meta.is_some());
+        if let Some(meta) = &notification.meta {
+            assert_eq!(
+                meta.get("request_id"),
+                Some(&serde_json::json!("req-cwd-test"))
+            );
+        }
+    }
+
+    #[test]
+    fn test_request_id_default() {
+        let converter = NotificationConverter::new();
+        // Default request_id should be None
+        assert!(converter.request_id.is_none());
+    }
+
+    #[test]
+    fn test_request_id_with_cwd_default() {
+        let converter = NotificationConverter::with_cwd(std::path::PathBuf::from("/test"));
+        // Default request_id should be None even with cwd
+        assert!(converter.request_id.is_none());
     }
 }
