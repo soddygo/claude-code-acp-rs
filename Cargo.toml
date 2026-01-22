@@ -1,6 +1,6 @@
 [package]
 name = "claude-code-acp-rs"
-version = "0.1.17"
+version = "0.1.18"
 authors = ["guochao.song <soddygo@qq.com>"]
 edition = "2024"
 rust-version = "1.90"
@@ -27,6 +27,9 @@ path = "src/main.rs"
 # Using official symposium-acp from crates.io
 # NOTE: During development, patch is applied below to use fork with flush mechanism
 sacp = "10.1.0"
+
+# Re-export agent-client-protocol-schema types for unstable features
+agent-client-protocol-schema = { version = "0.10.7", features = ["unstable_session_model"] }
 
 # Claude Agent SDK
 # 开发阶段：使用本地 vendors 目录中的 SDK
@@ -161,6 +164,9 @@ verbose-debug = []
 [patch.crates-io]
 # Patch sacp to use fork with flush mechanism during development
 sacp = { git = "https://github.com/soddygo/symposium-acp.git", branch = "main" }
+
+# Patch agent-client-protocol-schema to use local version with unstable_session_model feature
+agent-client-protocol-schema = { path = "vendors/agent-client-protocol", features = ["unstable_session_model"] }
 
 [lints.rust]
 future_incompatible = { level = "warn", priority = -1 }

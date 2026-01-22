@@ -5,8 +5,6 @@ version = 4
 [[package]]
 name = "agent-client-protocol-schema"
 version = "0.10.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a871245e59daecd6abf45f516d35445466294ae987dc685106e1676685bfdce"
 dependencies = [
  "anyhow",
  "derive_more",
@@ -276,8 +274,9 @@ checksum = "a1d728cc89cf3aee9ff92b05e62b19ee65a02b5702cff7d5a377e32c6ae29d8d"
 
 [[package]]
 name = "claude-code-acp-rs"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
+ "agent-client-protocol-schema",
  "anyhow",
  "async-stream",
  "async-trait",

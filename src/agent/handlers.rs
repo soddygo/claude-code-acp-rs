@@ -21,6 +21,9 @@ use sacp::schema::{
     SessionId, SessionMode, SessionModeId, SessionModeState, SessionNotification, SessionUpdate,
     SetSessionModeRequest, SetSessionModeResponse, StopReason,
 };
+
+// Unstable types from agent-client-protocol-schema
+use agent_client_protocol_schema::{ModelInfo, SessionModelState};
 use tokio::sync::broadcast;
 use tracing::instrument;
 
@@ -142,6 +145,9 @@ pub async fn handle_new_session(
     let available_modes = build_available_modes();
     let mode_state = SessionModeState::new("default", available_modes);
 
+    // Build available models
+    let model_state = build_available_models(config);
+
     let elapsed = start_time.elapsed();
     tracing::info!(
         session_id = %session_id,
@@ -167,7 +173,9 @@ pub async fn handle_new_session(
         });
     }
 
-    Ok(NewSessionResponse::new(session_id).modes(mode_state))
+    Ok(NewSessionResponse::new(session_id)
+        .modes(mode_state)
+        .models(model_state))
 }
 
 /// Handle session/load request
@@ -241,7 +249,12 @@ pub fn handle_load_session(
     let available_modes = build_available_modes();
     let mode_state = SessionModeState::new("default", available_modes);
 
-    Ok(LoadSessionResponse::new().modes(mode_state))
+    // Build available models
+    let model_state = build_available_models(config);
+
+    Ok(LoadSessionResponse::new()
+        .modes(mode_state)
+        .models(model_state))
 }
 
 /// Build available permission modes
@@ -260,6 +273,31 @@ fn build_available_modes() -> Vec<SessionMode> {
         SessionMode::new("bypassPermissions", "Bypass Permissions")
             .description("Bypass all permission checks"),
     ]
+}
+
+/// Build available models for session
+///
+/// Returns model information including current model and available models.
+/// Dynamically builds the model list based on the currently configured model.
+///
+/// Priority: config.model > ANTHROPIC_MODEL env var > "unknown" fallback
+fn build_available_models(config: &AgentConfig) -> SessionModelState {
+    // Get current model from config or environment
+    // Use "unknown" as fallback if no model is configured
+    let current_model_id = config
+        .model
+        .clone()
+        .or_else(|| std::env::var("ANTHROPIC_MODEL").ok())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Use raw model ID as display name (no formatting)
+    let display_name = current_model_id.clone();
+
+    // Build available models list with the current model
+    let available_models = vec![ModelInfo::new(current_model_id.clone(), display_name)
+        .description(format!("Current model: {}", current_model_id))];
+
+    SessionModelState::new(current_model_id, available_models)
 }
 
 /// Send available commands update to client
@@ -1108,6 +1146,7 @@ async fn drain_messages_synchronously(
 mod tests {
     use super::*;
     use sacp::schema::{ProtocolVersion, TextContent};
+    use serial_test::serial;
     use std::time::Duration;
     use futures::stream;
 
@@ -1284,5 +1323,57 @@ mod tests {
 
         // Should complete very quickly (stream ends immediately after 3 messages)
         assert!(elapsed < Duration::from_millis(100), "Drain should detect stream end quickly");
+    }
+
+    /// Test build_available_models function with config model
+    #[test]
+    fn test_build_available_models_with_config() {
+        let config = AgentConfig {
+            model: Some("glm-4.7".to_string()),
+            ..Default::default()
+        };
+        let model_state = build_available_models(&config);
+
+        assert_eq!(model_state.current_model_id.0, "glm-4.7".into());
+        assert_eq!(model_state.available_models.len(), 1);
+        assert_eq!(model_state.available_models[0].model_id.0, "glm-4.7".into());
+        assert_eq!(model_state.available_models[0].name, "glm-4.7");
+        assert_eq!(
+            model_state.available_models[0].description.as_ref().unwrap(),
+            "Current model: glm-4.7"
+        );
+    }
+
+    /// Test build_available_models function with environment variable
+    #[test]
+    #[serial]
+    fn test_build_available_models_with_env_var() {
+        unsafe { std::env::set_var("ANTHROPIC_MODEL", "gpt-4") };
+        let config = AgentConfig {
+            model: None,
+            ..Default::default()
+        };
+        let model_state = build_available_models(&config);
+
+        assert_eq!(model_state.current_model_id.0, "gpt-4".into());
+        assert_eq!(model_state.available_models.len(), 1);
+        assert_eq!(model_state.available_models[0].name, "gpt-4");
+        unsafe { std::env::remove_var("ANTHROPIC_MODEL") };
+    }
+
+    /// Test build_available_models function with default fallback
+    #[test]
+    #[serial]
+    fn test_build_available_models_default() {
+        // Ensure no env var is set
+        unsafe { std::env::remove_var("ANTHROPIC_MODEL") };
+        let config = AgentConfig {
+            model: None,
+            ..Default::default()
+        };
+        let model_state = build_available_models(&config);
+
+        assert_eq!(model_state.current_model_id.0, "unknown".into());
+        assert_eq!(model_state.available_models[0].name, "unknown");
     }
 }
