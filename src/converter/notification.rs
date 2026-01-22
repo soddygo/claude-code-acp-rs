@@ -791,6 +791,8 @@ impl NotificationConverter {
                     .unwrap_or("");
 
                 if !file_path.is_empty() && !new_string.is_empty() {
+                    // Create structured Diff content for Zed to render as visual diff
+                    // Reference: vendors/claude-code-acp/src/tools.ts:460-507
                     let diff = Diff::new(file_path, new_string).old_text(old_string);
                     vec![ToolCallContent::Diff(diff)]
                 } else {
