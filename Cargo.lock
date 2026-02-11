@@ -1514,9 +1514,9 @@ dependencies = [
 
 [[package]]
 name = "process-wrap"
-version = "9.0.1"
+version = "9.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd1395947e69c07400ef4d43db0051d6f773c21f647ad8b97382fc01f0204c60"
+checksum = "5811c133381ea59d7dd6ca37419b434bb2e3089a2a59c1e4b26a86fa79426e23"
 dependencies = [
  "futures",
  "indexmap",
