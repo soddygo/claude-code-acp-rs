@@ -131,7 +131,7 @@ base64 = "0.22.1"
 [dev-dependencies]
 tokio-test = "0.4"
 pretty_assertions = "1"
-tempfile = "3.25"
+tempfile = "3.26"
 serial_test = "3"
 
 [features]
